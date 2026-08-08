@@ -1,0 +1,16 @@
+# Secrets — NEVER commit. The parent dotfiles repo is PUBLIC.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+deploy/mysql-backup.cnf
+deploy/mysql-init/01-databases.sql
+
+# Generated / large
+client/
+data/
+backups/
+build/cache/
+*.zip
+*.MPQ
