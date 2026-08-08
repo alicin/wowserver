@@ -27,7 +27,16 @@
 
 # --- Tier 1: the server does not meet its brief without these -------------------------------
 mod-playerbots/mod-playerbots               master      a7b885d27134466dbc1c91d39b8241ea725a1bbb
-azerothcore/mod-autobalance                 stable      5d2778e301ae7684051cdc446efbe81c7ff2a79b
+# mod-autobalance is pinned to MASTER, not the `stable` tag, and the maintainer flags master
+# as beta. This is deliberate and forced: `stable` (5d2778e3, 2024-09-10) is ~23 months older
+# than the core pin and DOES NOT COMPILE against it -- five PlayerScript/AllCreatureScript
+# hooks are "marked override but does not override", and Creature::SetModifierValue no longer
+# exists. docs/modules.md 6.3 predicted exactly this and said the remedy is forward, not back:
+# there is nothing older than `stable` to walk back to. Verified on master @ 73d4ad3c: zero
+# references to any of the four removed symbols, and all 33 keys in conf/modules/AutoBalance.conf
+# still exist in its conf.dist (checked, not assumed). master additionally restores
+# MinPlayers.Raid / MinPlayers.RaidHeroic, which stable lacked.
+azerothcore/mod-autobalance                 master      73d4ad3c379fbfc35c63b5b9b44fba1f7d9e213d
 azerothcore/mod-solo-lfg                    master      3821fe1d108ade8d2b7ad6611e41154e05864c65
 azerothcore/mod-rdf-expansion               master      c7a91c5973cda4529495b52b89375913f98726d6
 NathanHandley/mod-ah-bot-plus               master      f685832994c825f90aa5a3dc0e1620aa568e875b

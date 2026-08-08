@@ -11,9 +11,25 @@
 # the SAME base tag. A binary linked against one glibc and copied into a different base fails
 # at runtime with `GLIBC_2.xx not found` -- on the VPS, not in CI, which is the worst place to
 # find out.
-ARG BASE=debian:bookworm-slim
+# UBUNTU, NOT DEBIAN, and this is not a preference. AzerothCore requires the ORACLE MySQL
+# client library; MariaDB's is not a drop-in. The package name `default-libmysqlclient-dev` is
+# the trap, because it resolves differently per distro:
+#     Debian bookworm -> MariaDB   (libmariadb-dev)
+#     Ubuntu 24.04    -> MySQL     (libmysqlclient-dev, 8.0.46)
+# On MariaDB the build dies ~16s into the compile with errors that read like a missing header:
+#     'mysql_ssl_mode' was not declared in this scope
+#     'MYSQL_OPT_SSL_MODE' was not declared in this scope
+#     'mysql_stmt_bind_named_param' was not declared in this scope
+# The first two are plain MySQL 5.7+ API that MariaDB Connector/C simply does not have. The
+# third is worse and explains why this cannot be patched around: MySQLConnection.cpp guards it
+# with `#if MYSQL_VERSION_ID >= 80300`, and MariaDB 11.4 reports MYSQL_VERSION_ID as 110402 --
+# numerically larger than 80300 -- so the preprocessor happily selects a MySQL-8.3-only
+# function that MariaDB never implemented. Real MySQL 8.0.46 reports 80046 and correctly takes
+# the mysql_stmt_bind_param branch. Upstream's own apps/docker/Dockerfile is Ubuntu for exactly
+# this reason.
+ARG BASE=ubuntu:24.04
 # To make an image byte-reproducible, override with a digest and the same value reaches both
-# stages: --build-arg BASE=debian:bookworm-slim@sha256:<digest>
+# stages: --build-arg BASE=ubuntu:24.04@sha256:<digest>
 #
 # The core fork pin lives here, not in modules.txt -- see docs/modules.md 6.2. Changing it is
 # a different class of event from bumping a module.
@@ -47,7 +63,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       build-essential cmake git ccache \
       libboost-all-dev libssl-dev default-libmysqlclient-dev libreadline-dev \
-      zlib1g-dev libbz2-dev && rm -rf /var/lib/apt/lists/*
+      zlib1g-dev libbz2-dev liblzma-dev libzstd-dev \
+      && rm -rf /var/lib/apt/lists/*
+# liblzma-dev + libzstd-dev exist ONLY because of -DBoost_USE_STATIC_LIBS=ON. Boost.Iostreams
+# offers lzma and zstd filters; the SHARED libboost_iostreams.so carries those as its own
+# NEEDED entries and the linker never has to think about them. The STATIC .a cannot, so the
+# symbols become the final link's problem and CMake's Boost import puts -llzma -lzstd on the
+# link line. Without the -dev packages there is no liblzma.so symlink to satisfy -l, and the
+# build dies at 99%, after ~1800 objects, with:
+#     /usr/bin/ld: cannot find -llzma: No such file or directory
+# i.e. the most expensive possible moment. This is the trade for static Boost -- worth it,
+# because the alternative couples the runtime image to Boost's minor version (see the runtime
+# stage), but it is not free.
 
 WORKDIR /src
 
@@ -120,6 +147,7 @@ RUN --mount=type=cache,target=/root/.ccache,sharing=locked \
       -DCMAKE_INSTALL_PREFIX=/opt/ac \
       -DCMAKE_BUILD_TYPE=Release \
       -DTOOLS_BUILD=none -DSCRIPTS=static -DMODULES=static \
+      -DBoost_USE_STATIC_LIBS=ON \
       -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
  && cmake --build /build -j"${JOBS:-$(nproc)}" \
  && ccache -s | sed -n '1,8p' \
@@ -131,50 +159,39 @@ RUN --mount=type=cache,target=/root/.ccache,sharing=locked \
 FROM ${BASE} AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 
-# These are the bookworm names for the libs the builder above links against.
+# Ubuntu 24.04 runtime names. These changed wholesale when the base moved from bookworm to
+# 24.04, and several are NOT the names you would guess -- Ubuntu's 64-bit-time_t transition
+# renamed a batch of them with a `t64` suffix:
+#     libssl3      -> libssl3t64
+#     libreadline8 -> libreadline8t64
+# Both old names still resolve to nothing on 24.04, and `apt-get install` fails loudly on a
+# missing package, so this is a build-time error rather than a silent one. Verified against
+# `apt-cache policy` inside ubuntu:24.04 on 2026-08-08.
 #
-# THE FIVE libboost-* PACKAGES ARE THE FIVE COMPONENTS THE FORK REQUIRES -- not four.
-# deps/boost/CMakeLists.txt in mod-playerbots/azerothcore-wotlk @ 092e9ba6:
-#   find_package(Boost 1.74 REQUIRED COMPONENTS filesystem program_options iostreams regex thread)
-# Upstream azerothcore/azerothcore-wotlk asks for four; the Playerbot fork adds `thread`, and
-# every one of them lands on the link line via `target_link_libraries(boost INTERFACE
-# ${Boost_LIBRARIES})`. docs/hosting.md 3.4 lists four because it derived the list from
-# UPSTREAM's deps/boost/CMakeLists.txt, not the fork's. libboost-thread1.74.0 is the fifth and
-# it is a deliberate divergence from that doc. If the ldd regeneration below ever shows
-# libboost_thread is not actually a DT_NEEDED entry, the package is harmless dead weight (about
-# 300 KB) -- the failure mode in the other direction is both daemons dying at exec on the VPS.
-# Upstream's own apps/docker/Dockerfile gets away with installing none of them because it
-# configures with -DBoost_USE_STATIC_LIBS="ON"; this Dockerfile does not, so Boost links
-# dynamically and all five .so files have to be here. Miss one and CI stays green while both
-# daemons die at exec, before they log anything:
-#   error while loading shared libraries: libboost_regex.so.1.74.0
-# No explicit libicu line is needed: libboost-regex1.74.0 depends on libicu72 and apt pulls it
-# in (verified by simulating this exact install on bookworm-slim). That is the same dependency
-# upstream installs by hand as libicu74 on its 24.04 base -- static boost_regex still links ICU
-# dynamically.
-# libboost-system1.74.0 is deliberately NOT here. Boost.System has been header-only since Boost
-# 1.69, AC does not list it as a component -- its CMakeLists carries the comment "Boost.System
-# is header-only since 1.69; do not require it explicitly" -- and libboost-filesystem1.74.0 does
-# not depend on it. Nothing links it.
+# NO libboost-* PACKAGES AT ALL, and that is the point. The builder now configures with
+# -DBoost_USE_STATIC_LIBS=ON (upstream's own apps/docker/Dockerfile does the same), so Boost is
+# linked into the binaries and the runtime stage needs none of it. This deliberately kills a
+# whole bug class: the previous dynamic-boost arrangement coupled the runtime package list to
+# the builder's Boost minor version, and the fork requires FIVE components rather than
+# upstream's four (deps/boost/CMakeLists.txt at 092e9ba6 adds `thread`). Missing one produced a
+# green CI and two daemons dying at exec before logging anything:
+#     error while loading shared libraries: libboost_regex.so.1.74.0
+# With static Boost there is nothing to miss. libicu74 stays: statically-linked boost_regex
+# still links ICU dynamically.
 #
-# libmariadb3, NOT libmysqlclient21. default-libmysqlclient-dev resolves to MariaDB on Debian
-# (-> libmariadb-dev-compat). libmysqlclient21 is a different, also-present package; picking the
-# wrong one gives you a runtime "cannot open shared object file", not a build error. Upstream's
-# image installs libmysqlclient21 because it is on Ubuntu, where the same metapackage resolves
-# to MySQL.
+# libmysqlclient21, NOT libmariadb3 -- the counterpart of the base-image decision at the top of
+# this file. On Ubuntu the dev metapackage resolves to Oracle MySQL, so the runtime .so must be
+# MySQL's too. Mixing them gives a runtime "cannot open shared object file", not a build error.
 #
-# libbz2-1.0 and zlib1g are listed even though bookworm-slim already ships both, because
-# deps/bzip2 and deps/zlib both do `find_package(... REQUIRED)` + `add_library(... SHARED
-# IMPORTED)` on UNIX, so both are real DT_NEEDED entries of worldserver rather than something
-# only the builder used. Listing a preinstalled package is free; discovering a slimmed base
-# image dropped one is not.
+# libbz2-1.0 and zlib1g are listed even though the base already ships both, because deps/bzip2
+# and deps/zlib both do `find_package(... REQUIRED)` + `add_library(... SHARED IMPORTED)` on
+# UNIX, so both are real DT_NEEDED entries of worldserver rather than something only the builder
+# used. Listing a preinstalled package is free; discovering a slimmed base dropped one is not.
 #
 # default-mysql-client is NOT optional and NOT for you to type commands with. AzerothCore's
 # DBUpdater does not apply SQL migrations in C++ -- DBUpdaterUtil::CheckExecutable() looks for a
 # `mysql` binary on PATH and the first boot aborts with "Didn't find any executable MySQL binary
-# at '...' or in path" when there isn't one (docs/bring-up.md 1.1 row 2). On bookworm the
-# metapackage pulls mariadb-client, which provides /usr/bin/mysql. AzerothCore's own runtime
-# image installs this same package. It drags perl in behind it; that is the price.
+# at '...' or in path" when there isn't one (docs/bring-up.md 1.1 row 2).
 #
 # REGENERATE THIS LIST, DO NOT MAINTAIN IT BY HAND. docs/hosting.md 3.4 has the two commands:
 # an ldd-of-the-builder pass that maps every DT_NEEDED back to its package (query both the
@@ -182,9 +199,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 # `ldd ... | grep "not found"` check on the finished runtime image that turns a missing library
 # into a red CI run instead of a dead server. Run both after any core bump.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libboost-filesystem1.74.0 libboost-program-options1.74.0 \
-      libboost-iostreams1.74.0 libboost-regex1.74.0 libboost-thread1.74.0 \
-      libssl3 libmariadb3 libreadline8 libbz2-1.0 zlib1g ca-certificates \
+      ca-certificates \
+      libmysqlclient21 libssl3t64 libreadline8t64 libicu74 \
+      libbz2-1.0 zlib1g liblzma5 libzstd1 \
       default-mysql-client \
       && rm -rf /var/lib/apt/lists/*
 
