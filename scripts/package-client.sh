@@ -156,13 +156,24 @@ fi
 
 STAMP="$(date +%Y%m%d-%H%M)"
 NAME="wow335-${TAG:+$TAG-}$STAMP"
-STAGE="$(mktemp -d)/$NAME"
+# Stage NEXT TO THE CLIENT, never in $TMPDIR. Two reasons, both learned the hard way:
+#   * /tmp here is a 16 GB tmpfs and the client is 17 GB -- "Disk quota exceeded" mid-copy.
+#   * hardlinks cannot cross filesystems, so `cp -al` silently degrades to a real 17 GB copy
+#     (or fails), which is the whole thing the hardlink staging exists to avoid.
+STAGE="$(dirname "$CLIENT")/.stage-$NAME"
 mkdir -p "$STAGE" "$OUT"
-trap 'rm -rf "$(dirname "$STAGE")"' EXIT
+trap 'rm -rf "$STAGE"' EXIT
 
 echo "== staging (hardlink copy, no 17 GB duplication)"
-cp -al "$CLIENT" "$STAGE/ChromieCraft_3.3.5a" 2>/dev/null \
-  || cp -a "$CLIENT" "$STAGE/ChromieCraft_3.3.5a"
+# rm first: a half-finished dest from a previous failed run makes `cp -a DIR DEST` NEST
+# (DEST/ChromieCraft_3.3.5a/ChromieCraft_3.3.5a) instead of overwriting, and you only find out
+# when the zip is the wrong shape.
+rm -rf "$STAGE/ChromieCraft_3.3.5a"
+if ! cp -al "$CLIENT" "$STAGE/ChromieCraft_3.3.5a" 2>/dev/null; then
+    echo "   (hardlink staging unavailable -- falling back to a full copy, this is slow)"
+    rm -rf "$STAGE/ChromieCraft_3.3.5a"
+    cp -a "$CLIENT" "$STAGE/ChromieCraft_3.3.5a"
+fi
 S="$STAGE/ChromieCraft_3.3.5a"
 
 echo "== stripping per-machine state"
@@ -171,7 +182,13 @@ find "$S" -maxdepth 1 -iname '*.log' -delete 2>/dev/null || true
 
 echo "== realmlist -> $REALM"
 for d in "$S"/Data/[a-z][a-z][A-Z][A-Z]; do
-    [[ -d "$d" ]] && printf 'set realmlist %s\n' "$REALM" > "$d/realmlist.wtf"
+    [[ -d "$d" ]] || continue
+    # rm FIRST. The stage is a hardlink farm (cp -al), so `>` would truncate the inode SHARED
+    # with the live working client and rewrite its realmlist too -- silently repointing the
+    # client you actually play on at whatever address you happened to package for. Deleting
+    # breaks the link so the redirect creates a fresh inode in the stage only.
+    rm -f "$d/realmlist.wtf"
+    printf 'set realmlist %s\n' "$REALM" > "$d/realmlist.wtf"
 done
 mkdir -p "$S/WTF"
 # Config.wtf uses a DIFFERENT syntax from realmlist.wtf: quoted, camel-cased key.

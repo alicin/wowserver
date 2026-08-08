@@ -1,0 +1,45 @@
+# Fully pinned, including transitive dependencies — this file is the lockfile.
+#
+# The repo pins the mysql image to a digest and refuses `latest` for the game image
+# (deploy/docker-compose.yml, hosting.md 3.6). A portal whose dependency set changes
+# under it on the next rebuild would be the one unpinned thing in the stack.
+#
+# Regenerate against the base image the Dockerfile actually uses, not the host Python:
+#
+#   printf 'fastapi\nuvicorn\njinja2\nitsdangerous\nPyMySQL\npython-multipart\nhttptools\nuvloop\n' > base.txt
+#   docker run --rm -v "$PWD:/w" -w /w python:3.13-slim sh -c \
+#     "pip install -q --dry-run --report /w/r.json -r base.txt >/dev/null && python -c \"
+#   import json;[print(i['metadata']['name']+'=='+i['metadata']['version'])
+#     for i in sorted(json.load(open('/w/r.json'))['install'],
+#                     key=lambda d: d['metadata']['name'].lower())]\""
+#
+# Resolved 2026-08-08 on python:3.13-slim.
+
+# --- direct ---
+fastapi==0.141.1
+uvicorn==0.52.1
+Jinja2==3.1.6
+itsdangerous==2.2.0
+# Pure Python. mysqlclient would be faster and needs gcc + libmysqlclient-dev in the
+# build stage; at five users the C driver buys nothing worth a compiler in the image.
+PyMySQL==1.2.0
+# FastAPI needs this to parse the login form. Without it, Form() raises at import.
+python-multipart==0.0.32
+# uvicorn's fast loop and HTTP parser. Worth having with the `direct` download mode,
+# where the event loop actually shuttles the file.
+httptools==0.8.0
+uvloop==0.22.1
+
+# --- transitive ---
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+click==8.4.2
+h11==0.16.0
+idna==3.18
+MarkupSafe==3.0.3
+pydantic==2.13.4
+pydantic_core==2.46.4
+starlette==1.6.0
+typing-inspection==0.4.2
+typing_extensions==4.16.0

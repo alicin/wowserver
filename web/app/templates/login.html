@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Sign in &mdash; {{ server_name }}{% endblock %}
+
+{#
+  The login page drops the shell entirely: no navigation to nowhere, no footer, one job.
+  Copy note — the error message is the same for a wrong password and an account that
+  does not exist, because the page must not become a way to find out which of a handful
+  of names are registered.
+#}
+{% block shell %}
+<div class="gate">
+  <div class="gate-inner">
+    <p class="eyebrow">Wrath of the Lich King &middot; 3.3.5a</p>
+    <h1 class="gate-mark">{{ server_name }}</h1>
+    <p class="gate-sub">Sign in with your in-game account.</p>
+    <div class="gate-rule"></div>
+
+    {% if error %}
+    <p class="alert" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('login_submit') }}" autocomplete="on">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="field">
+        <label for="username">Account name</label>
+        <input id="username" name="username" type="text" maxlength="32" required
+               autocapitalize="characters" autocorrect="off" spellcheck="false"
+               autocomplete="username" autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" maxlength="256" required
+               autocomplete="current-password">
+      </div>
+      <button class="button wide" type="submit">Sign in</button>
+    </form>
+
+    <p class="hint">
+      Same name and password you type at the game's login screen. Lost it? Ask whoever
+      runs the server &mdash; nobody can read it back to you, it can only be reset.
+    </p>
+  </div>
+</div>
+{% endblock %}

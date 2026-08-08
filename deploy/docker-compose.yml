@@ -274,6 +274,51 @@ services:
 # upstream topology and the fourth schema stays empty, then worldserver dies on its
 # first prepared statement against it.  bring-up.md 2.4
 
+
+  # -------------------------------------------------------------------------------------------
+  # Download portal. Friends sign in with their WOW ACCOUNT: the app recomputes the SRP6
+  # verifier from the submitted password and the stored salt and compares it in constant time
+  # (web/app/srp6.py). There is no handshake and no write path -- see the DB user below.
+  # -------------------------------------------------------------------------------------------
+  web:
+    build:
+      context: ../web
+    image: wowserver-web:local
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORTAL_SERVER_NAME:   "wowserver"
+      PORTAL_REALMLIST:     "${REALM_ADDRESS:?set REALM_ADDRESS in deploy/.env}"
+      PORTAL_SECRET_KEY:    "${PORTAL_SECRET_KEY:?set PORTAL_SECRET_KEY in deploy/.env}"
+      # NOT the `acore` user. acore_web has SELECT on two schemas and nothing else
+      # (web/sql/grant-webapp.sql). An app compromise cannot write to acore_auth.
+      PORTAL_DB_HOST:       "mysql"
+      PORTAL_DB_USER:       "acore_web"
+      PORTAL_DB_PASSWORD:   "${PORTAL_DB_PASSWORD:?set PORTAL_DB_PASSWORD in deploy/.env}"
+      PORTAL_DOWNLOAD_ROOT: "/srv/wow/dist"
+      # EXPLICIT: config.py defaults to <root>/manifest.json, package-extras.sh writes
+      # downloads.json. Two correct halves that do not meet on their own.
+      PORTAL_MANIFEST:      "/srv/wow/dist/downloads.json"
+      # Caddy terminates TLS here, and it has no X-Accel-Redirect. It already serves /files/
+      # statically with native Range support, so hand the 16.6 GB transfer to it rather than
+      # streaming through Python. See web/app/routes/downloads.py for the tradeoff.
+      PORTAL_DOWNLOAD_MODE: "redirect"
+      # Secure flag on the session cookie. Safe to enable ONLY because Caddy really does
+      # terminate TLS for every hostname here. With PORTAL_TLS=1 and no certificate the browser
+      # refuses to send the cookie back and nobody can stay signed in -- which is why it
+      # defaults to 0 rather than being assumed.
+      PORTAL_TLS:           "${PORTAL_TLS:-0}"
+    volumes:
+      # Read-only: the portal reads the manifest and stats files, and never writes here.
+      - /srv/wow/dist:/srv/wow/dist:ro
+    # Loopback ONLY. Caddy on the host proxies to this; it must never be world-reachable,
+    # and a published container port would bypass ufw entirely.
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks: [wow]
+
 volumes:
   mysql-data:
   wow-logs:

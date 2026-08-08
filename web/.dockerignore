@@ -1,0 +1,15 @@
+# Keep the build context to the app and its lockfile. Everything below either belongs
+# to the host (tests, docs, the nginx config nginx reads from a bind mount) or must
+# never enter an image at all (.env).
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+tests/
+tools/
+nginx/
+sql/
+README.md
+manifest.example.json

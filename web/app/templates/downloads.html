@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Downloads &mdash; {{ server_name }}{% endblock %}
+
+{% block content %}
+<p class="eyebrow">Getting in</p>
+<h1 class="page">Downloads</h1>
+<p class="lede">
+  Everything you need is here. Take the full client once; after that only the small
+  files change.
+</p>
+
+{# The connect plaque. This one line is the difference between a working client and a
+   client that sits on "Unable to connect", so it gets the strongest treatment on the
+   page and sits above the downloads rather than under them. #}
+<section class="plaque" aria-labelledby="connect-heading">
+  <p class="eyebrow" id="connect-heading">How to connect</p>
+  <div class="plaque-line">
+    <code id="realmlist-line">set realmlist {{ realmlist }}</code>
+  </div>
+  <ol>
+    <li>Open <code class="path">&lt;WoW folder&gt;\Data\enUS\realmlist.wtf</code> in Notepad.</li>
+    <li>Replace everything in it with the line above, and save.</li>
+    <li>Start <code class="path">Wow.exe</code> and log in with this same account.</li>
+  </ol>
+  {# The manifest records the address the client pack was BUILT with. If that is not
+     the address this portal tells people to type, the packaged client points somewhere
+     else and every friend who trusts "it is already set up" ends up stuck. Say so. #}
+  {% if catalog.realmlist and catalog.realmlist != realmlist %}
+  <p class="alert">
+    Heads up: the client pack below was built for
+    <span class="mono">{{ catalog.realmlist }}</span>, not
+    <span class="mono">{{ realmlist }}</span>. Do the three steps above after unzipping it.
+  </p>
+  {% else %}
+  <p class="hint">
+    The packaged client below already has this set. You only need to edit it if you
+    brought your own copy of 3.3.5a. A non-English client uses its own folder under
+    <code class="path">Data\</code>, for example <code class="path">deDE</code>.
+  </p>
+  {% endif %}
+</section>
+
+<h2 class="section">Files</h2>
+
+{% if catalog.artifacts %}
+<ul class="artifacts">
+  {% for a in catalog.artifacts %}
+  <li class="artifact q-{{ a.quality }}">
+    <div>
+      <span class="artifact-kind">{{ a.kind or "download" }}</span>
+      <h3 class="artifact-name">{{ a.title }}</h3>
+      {% if a.audience %}<p class="artifact-who">{{ a.audience }}</p>{% endif %}
+      {% for para in a.paragraphs %}
+      <p class="artifact-note">{{ para }}</p>
+      {% endfor %}
+      {% if a.install %}
+      <p class="artifact-install"><span class="artifact-install-key">Where it goes</span> {{ a.install }}</p>
+      {% endif %}
+      {% if a.contains %}
+      {# <details> and not a script: the disclosure has to work with JavaScript off,
+         and this is the one interaction the browser gives us for free. #}
+      <details class="contains">
+        <summary>What's in it</summary>
+        <ul>
+          {% for item in a.contains %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+      <p class="artifact-meta">
+        <span class="size">{{ a.size_human }}</span>
+        <span class="file">{{ a.filename }}</span>
+        {# Truncated because 64 characters is a wall. The full value is in the title
+           attribute and in the linked file, so `sha256sum -c` does the real checking. #}
+        <span title="sha256 {{ a.sha256 }}">sha256 {{ a.sha256_short }}&hellip;</span>
+        <a href="{{ url_for('download_sha256', artifact_id=a.id) }}">.sha256</a>
+      </p>
+    </div>
+    {% if a.available %}
+    <a class="button" href="{{ url_for('download', artifact_id=a.id) }}"
+       download="{{ a.filename }}">Download</a>
+    {% else %}
+    <span class="button off" aria-disabled="true" title="Listed in the manifest but not on the server">
+      Not uploaded
+    </span>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+
+{# trim_blocks strips the newline after a tag, so these sentences need explicit spaces
+   or they run together as "…1553.Packed 08 Aug". #}
+<p class="hint">
+  Big downloads resume &mdash; if one dies, start it again and it picks up where it stopped.
+  {%- if catalog.generated %} Packed {{ when(catalog.generated) }}.{% endif %}
+  {%- if catalog.repo %} Built from <span class="mono">{{ catalog.repo }}</span>.{% endif %}
+  {%- if account and account.is_gm and catalog.warnings %}
+  <span class="warn">{{ catalog.warnings|join("; ") }}.</span>
+  {%- endif %}
+</p>
+{% else %}
+<div class="empty">
+  <p>Nothing to download yet.</p>
+  <p class="mono">{{ catalog.error }}</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block script %}
+<script nonce="{{ nonce }}">
+// Added by script rather than written into the markup, so a browser with JavaScript
+// off never shows a button that does nothing. The realmlist is also selectable text.
+(function () {
+  var line = document.getElementById('realmlist-line');
+  if (!line || !navigator.clipboard) return;
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'copy';
+  btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    navigator.clipboard.writeText(line.textContent).then(function () {
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
+    });
+  });
+  line.parentNode.appendChild(btn);
+})();
+</script>
+{% endblock %}

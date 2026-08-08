@@ -1,0 +1,576 @@
+{#
+  The whole visual system lives in this file.
+
+  No CDN, no webfonts, no external anything: the VPS may be firewalled and a portal that
+  waits four seconds for fonts.googleapis.com to time out is a portal nobody uses. The
+  stylesheet is inline under a per-response CSP nonce (see main.py), which is what lets
+  it stay inline without weakening the policy to 'unsafe-inline'.
+
+  Two colour systems, both borrowed from the game rather than invented:
+    * item quality  -> the accent on each download row. Every player already reads
+                       purple/blue/green as a ranking, so the categories need no legend.
+    * class colours -> character names on the account page, exactly as the client
+                       colours them. See app/wowdata.py for the two deviations.
+#}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}{{ server_name }}{% endblock %}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230b121c'/%3E%3Cpath d='M16 4 L25 16 L16 28 L7 16 Z' fill='none' stroke='%23e6cc80' stroke-width='2'/%3E%3Cpath d='M16 10 L16 22' stroke='%236fd3ee' stroke-width='2'/%3E%3C/svg%3E">
+<style nonce="{{ nonce }}">
+:root {
+  --ground:   #0b121c;
+  --ground-2: #0e1725;
+  --panel:    #131f2e;
+  --panel-2:  #18273a;
+  --line:     #22374e;
+  --line-soft:#1a2b3d;
+  --ink:      #e7dfd0;
+  --ink-2:    #b9c6d6;
+  --muted:    #7d8fa6;
+  --gold:     #e6cc80;
+  --gold-2:   #c9ab63;
+  --frost:    #6fd3ee;
+  --danger:   #e8705f;
+
+  --q-poor:      #9d9d9d;
+  --q-common:    #f0ece2;
+  --q-uncommon:  #4ede4e;
+  --q-rare:      #3d9bff;
+  --q-epic:      #b96cf5;
+  --q-legendary: #ff9d3c;
+
+  /* Palatino is on every Windows and every Mac, needs no download, and its
+     calligraphic old-style forms are the closest thing in a system stack to the
+     glyphic serif the game itself sets its headings in. */
+  --display: "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", P052, Georgia, serif;
+  --body: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+
+  --radius: 3px;
+  --shell: 62rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  /* A single cold light source, top-left, so the page has a direction without any
+     image assets. Fixed so it does not slide under the content on scroll. */
+  background-image:
+    radial-gradient(56rem 34rem at 12% -8%, rgba(111, 211, 238, 0.07), transparent 70%),
+    radial-gradient(44rem 30rem at 96% 4%, rgba(230, 204, 128, 0.045), transparent 70%);
+  background-attachment: fixed;
+  color: var(--ink);
+  font: 400 16px/1.6 var(--body);
+  min-height: 100vh;
+}
+
+a { color: var(--gold); text-decoration: none; }
+a:hover { color: #f3e0aa; text-decoration: underline; }
+
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---- shell ------------------------------------------------------------- */
+
+.shell { width: 100%; max-width: var(--shell); margin: 0 auto; padding: 0 1.25rem; }
+
+.topbar {
+  border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, rgba(19, 31, 46, 0.92), rgba(11, 18, 28, 0.7));
+  backdrop-filter: blur(6px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.topbar .shell {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  min-height: 3.75rem;
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-family: var(--display);
+  font-size: 1.05rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-right: auto;
+}
+.brand:hover { text-decoration: none; color: var(--gold); }
+.brand .rune { color: var(--gold); font-size: 0.9em; }
+
+.topnav { display: flex; align-items: center; gap: 1.25rem; }
+.topnav a {
+  color: var(--ink-2);
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid transparent;
+}
+.topnav a:hover { color: var(--ink); text-decoration: none; border-bottom-color: var(--line); }
+.topnav a.on { color: var(--gold); border-bottom-color: var(--gold); }
+
+.signout { display: inline; margin: 0; }
+.signout button {
+  background: none;
+  border: 0;
+  padding: 0.35rem 0;
+  font: inherit;
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+}
+.signout button:hover { color: var(--danger); }
+
+main { padding: 2.75rem 0 4rem; }
+
+.footer {
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 1.5rem 0 2.5rem;
+}
+
+/* ---- type -------------------------------------------------------------- */
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--frost);
+  margin: 0 0 0.6rem;
+}
+
+h1.page {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: clamp(1.9rem, 5vw, 2.6rem);
+  letter-spacing: 0.01em;
+  margin: 0 0 0.5rem;
+}
+
+h2.section {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 1.35rem;
+  letter-spacing: 0.02em;
+  margin: 2.75rem 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.lede { color: var(--ink-2); margin: 0 0 2rem; max-width: 46ch; }
+.dim { color: var(--muted); }
+.mono { font-family: var(--mono); }
+
+/* ---- panels ------------------------------------------------------------ */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.35rem;
+}
+
+/* ---- the connect plaque: the one line everybody has to type ------------- */
+
+.plaque {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--frost);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(111, 211, 238, 0.06), rgba(111, 211, 238, 0.01)),
+    var(--panel);
+  padding: 1.15rem 1.35rem;
+}
+.plaque-line {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  margin: 0.35rem 0 0.9rem;
+}
+.plaque-line code {
+  font-family: var(--mono);
+  font-size: clamp(1rem, 3.4vw, 1.35rem);
+  color: var(--frost);
+  letter-spacing: 0.01em;
+  word-break: break-all;
+}
+.plaque ol { margin: 0; padding-left: 1.15rem; color: var(--ink-2); font-size: 0.92rem; }
+.plaque ol li { margin: 0.3rem 0; }
+.plaque code.path {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  color: var(--ink);
+  background: var(--ground-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  padding: 0.05em 0.35em;
+  word-break: break-all;
+}
+
+.copy {
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--frost);
+  background: transparent;
+  border: 1px solid rgba(111, 211, 238, 0.35);
+  border-radius: 2px;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.copy:hover { background: rgba(111, 211, 238, 0.12); }
+
+/* ---- downloads --------------------------------------------------------- */
+
+.artifacts { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+
+.artifact {
+  --accent: var(--q-common);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem 1.5rem;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1.05rem 1.25rem;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.artifact:hover { background: var(--panel-2); border-color: var(--line); border-left-color: var(--accent); }
+.artifact.q-poor      { --accent: var(--q-poor); }
+.artifact.q-common    { --accent: var(--q-common); }
+.artifact.q-uncommon  { --accent: var(--q-uncommon); }
+.artifact.q-rare      { --accent: var(--q-rare); }
+.artifact.q-epic      { --accent: var(--q-epic); }
+.artifact.q-legendary { --accent: var(--q-legendary); }
+
+.artifact-kind {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 0.3rem;
+}
+.artifact-name {
+  font-family: var(--display);
+  font-size: 1.2rem;
+  line-height: 1.25;
+  margin: 0 0 0.3rem;
+  font-weight: 400;
+}
+.artifact-who { color: var(--ink-2); font-size: 0.93rem; margin: 0 0 0.55rem; }
+.artifact-note { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.55rem; white-space: pre-line; }
+
+.artifact-install { color: var(--ink-2); font-size: 0.85rem; margin: 0 0 0.55rem; }
+.artifact-install-key {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-right: 0.4rem;
+}
+
+/* A <details>, so "what's in it" needs no JavaScript and no layout of its own. */
+.contains { margin: 0 0 0.6rem; font-size: 0.82rem; }
+.contains summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  width: fit-content;
+}
+.contains summary:hover { color: var(--ink-2); }
+.contains ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.7;
+}
+
+.artifact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--muted);
+  align-items: baseline;
+}
+.artifact-meta .size { color: var(--ink-2); }
+.artifact-meta a { color: var(--muted); border-bottom: 1px dotted var(--line); }
+.artifact-meta a:hover { color: var(--gold); text-decoration: none; }
+
+.button {
+  display: inline-block;
+  font: inherit;
+  font-size: 0.82rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ground);
+  background: linear-gradient(180deg, var(--gold), var(--gold-2));
+  border: 1px solid var(--gold-2);
+  border-radius: 2px;
+  padding: 0.6rem 1.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 120ms ease;
+}
+.button:hover { filter: brightness(1.1); text-decoration: none; color: var(--ground); }
+.button.wide { display: block; width: 100%; text-align: center; padding: 0.75rem 1rem; }
+.button.off {
+  background: none;
+  color: var(--muted);
+  border-color: var(--line);
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* ---- account ----------------------------------------------------------- */
+
+/* Flex, not grid: `grid-template-columns: repeat(auto-fit, ...)` leaves the last row
+   short when the item count is not a multiple of the column count, and the hole shows
+   as a large empty panel. Flex items with `flex: 1 1 <basis>` stretch to close it, so
+   the block reads as a filled strip whatever number of facts a page has. */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--line-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.fact { flex: 1 1 11rem; background: var(--panel); padding: 0.9rem 1.1rem; }
+.fact dt {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+.fact dd { margin: 0; font-size: 1rem; color: var(--ink); }
+.fact dd .sub { display: block; color: var(--muted); font-size: 0.8rem; }
+
+.badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: 2px;
+  border: 1px solid var(--gold-2);
+  color: var(--gold);
+}
+.badge.online { border-color: var(--q-uncommon); color: var(--q-uncommon); }
+
+/* The character roster: the client's own character-select list, in class colours.
+   The colours are classes rather than a style="" attribute on purpose — a CSP nonce
+   does not cover inline style attributes, and allowing style-src-attr 'unsafe-inline'
+   site-wide to tint ten names would be a bad trade. Suffixes are ChrClasses.dbc ids. */
+.roster { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.c1  { --klass: #C79C6E; }  /* Warrior */
+.c2  { --klass: #F58CBA; }  /* Paladin */
+.c3  { --klass: #ABD473; }  /* Hunter */
+.c4  { --klass: #FFF569; }  /* Rogue */
+.c5  { --klass: #FFFFFF; }  /* Priest */
+.c6  { --klass: #E24A60; }  /* Death Knight, lifted from #C41F3B */
+.c7  { --klass: #3D9BFF; }  /* Shaman, lifted from #0070DE */
+.c8  { --klass: #69CCF0; }  /* Mage */
+.c9  { --klass: #9482C9; }  /* Warlock */
+.c11 { --klass: #FF7D0A; }  /* Druid */
+.hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--klass, var(--muted));
+  border-radius: var(--radius);
+  padding: 0.85rem 1.15rem;
+}
+.hero-name {
+  font-family: var(--display);
+  font-size: 1.25rem;
+  color: var(--klass, var(--ink));
+  line-height: 1.2;
+}
+.hero-line { color: var(--ink-2); font-size: 0.88rem; }
+/* Bright enough to be seen. At var(--line) the separators vanished into the panel and
+   the four facts on this line ran together as one phrase. */
+.hero-line .sep { color: #4a6480; padding: 0 0.3rem; }
+.hero-level {
+  font-family: var(--display);
+  font-size: 1.9rem;
+  line-height: 1;
+  color: var(--ink);
+  text-align: right;
+}
+.hero-level span {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+/* ---- login ------------------------------------------------------------- */
+
+.gate { min-height: 100vh; display: grid; place-items: center; padding: 3rem 1.25rem; }
+.gate-inner { width: 100%; max-width: 24rem; }
+.gate-mark {
+  font-family: var(--display);
+  font-size: clamp(2rem, 8vw, 2.9rem);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin: 0 0 0.35rem;
+  font-weight: 400;
+}
+.gate-sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 2.25rem; }
+.gate-rule {
+  width: 3.5rem;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gold), transparent);
+  margin: 0 0 1.5rem;
+}
+
+.field { margin-bottom: 1.1rem; }
+.field label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+.field input {
+  width: 100%;
+  font: inherit;
+  font-family: var(--mono);
+  color: var(--ink);
+  background: var(--ground-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0.7rem 0.8rem;
+}
+.field input:focus { border-color: var(--gold-2); outline: none; box-shadow: 0 0 0 2px rgba(230, 204, 128, 0.18); }
+
+.alert {
+  border: 1px solid rgba(232, 112, 95, 0.45);
+  border-left: 3px solid var(--danger);
+  background: rgba(232, 112, 95, 0.08);
+  color: #f3b3a8;
+  border-radius: var(--radius);
+  padding: 0.7rem 0.9rem;
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+.hint { color: var(--muted); font-size: 0.82rem; margin: 1.25rem 0 0; }
+
+/* ---- empty / error ----------------------------------------------------- */
+
+.empty {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.warn { color: var(--danger); }
+
+.code {
+  font-family: var(--display);
+  font-size: clamp(3rem, 14vw, 5rem);
+  line-height: 1;
+  color: var(--gold);
+  margin: 0 0 0.5rem;
+}
+
+/* ---- narrow ------------------------------------------------------------ */
+
+@media (max-width: 34rem) {
+  .artifact, .hero { grid-template-columns: 1fr; }
+  .hero-level { text-align: left; display: flex; align-items: baseline; gap: 0.5rem; }
+  .hero-level span { margin: 0; }
+  .topbar .shell { min-height: 0; padding-top: 0.6rem; padding-bottom: 0.6rem; }
+  .brand { width: 100%; margin-right: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+</style>
+</head>
+<body>
+{% block shell %}
+<header class="topbar">
+  <div class="shell">
+    <a class="brand" href="{{ url_for('home') }}"><span class="rune">&#9670;</span>{{ server_name }}</a>
+    {% if account %}
+    <nav class="topnav">
+      {% for item in nav %}
+      <a href="{{ item.href }}"{% if item.active %} class="on" aria-current="page"{% endif %}>{{ item.label }}</a>
+      {% endfor %}
+      <form class="signout" method="post" action="{{ url_for('logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">Sign out</button>
+      </form>
+    </nav>
+    {% endif %}
+  </div>
+</header>
+
+<main>
+  <div class="shell">
+    {% block content %}{% endblock %}
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    {{ server_name }} &mdash; Wrath of the Lich King 3.3.5a, for friends only.
+  </div>
+</footer>
+{% endblock %}
+{% block script %}{% endblock %}
+</body>
+</html>

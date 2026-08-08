@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}{{ account.username }} &mdash; {{ server_name }}{% endblock %}
+
+{% block content %}
+<p class="eyebrow">Account</p>
+<h1 class="page">{{ account.username }}</h1>
+<p class="lede">
+  {% if account.is_gm %}
+  You have {{ account.gm_title|lower }} rights on this realm.
+  {% else %}
+  Everything the server knows about you.
+  {% endif %}
+</p>
+
+<dl class="facts">
+  <div class="fact">
+    <dt>Status</dt>
+    <dd>
+      {% if account.online %}<span class="badge online">In game</span>
+      {% elif account.locked %}<span class="badge">Locked</span>
+      {% else %}Offline{% endif %}
+    </dd>
+  </div>
+  <div class="fact">
+    <dt>Access</dt>
+    <dd>{{ account.gm_title }}{% if account.is_gm %} <span class="sub">level {{ account.gm_level }}</span>{% endif %}</dd>
+  </div>
+  <div class="fact">
+    <dt>Expansion</dt>
+    <dd>{{ account.expansion_name }}</dd>
+  </div>
+  <div class="fact">
+    <dt>Created</dt>
+    <dd>{{ when(account.joindate) }}</dd>
+  </div>
+  <div class="fact">
+    <dt>Last login</dt>
+    <dd>
+      {{ when(account.last_login) }}
+      {% if age(account.last_login) %}<span class="sub">{{ age(account.last_login) }}</span>{% endif %}
+    </dd>
+  </div>
+  <div class="fact">
+    <dt>Time played</dt>
+    <dd>{{ played(account.total_seconds) }}</dd>
+  </div>
+</dl>
+
+<h2 class="section">Characters</h2>
+
+{% if characters %}
+{# The roster is the client's own character-select list: name in the class colour the
+   game uses, level on the right, one line of who they are. See app/wowdata.py. #}
+<ul class="roster">
+  {% for c in characters %}
+  <li class="hero c{{ c.class_id }}">
+    <div>
+      <div class="hero-name">
+        {{ c.name }}
+        {% if c.online %}<span class="badge online">In game</span>{% endif %}
+      </div>
+      <div class="hero-line">
+        {{ c.race }} {{ c.klass }}<span class="sep">&middot;</span>{{ c.faction }}<span class="sep">&middot;</span>{{ played(c.total_seconds) }} played<span class="sep">&middot;</span>{{ "{:,}".format(c.gold) }}g
+      </div>
+    </div>
+    <div class="hero-level">{{ c.level }}<span>level</span></div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty">
+  <p>No characters yet.</p>
+  <p>Log in to the game and make one &mdash; it will show up here.</p>
+</div>
+{% endif %}
+
+{% if realm %}
+{# GM only. acore_auth.realmlist.address is what the auth server hands to a client
+   after it signs in; if it is not reachable from where your friends are, they log in
+   and then hang at "Entering world" with no error. docs/hosting.md 5.2. #}
+<h2 class="section">Realm registration</h2>
+<dl class="facts">
+  <div class="fact">
+    <dt>Realm</dt>
+    <dd>{{ realm.name }}</dd>
+  </div>
+  <div class="fact">
+    <dt>Address handed to clients</dt>
+    <dd class="mono">{{ realm.address }}:{{ realm.port }}</dd>
+  </div>
+  <div class="fact">
+    <dt>Matches realmlist</dt>
+    <dd>
+      {% if realm.address == realmlist %}Yes
+      {% else %}<span class="warn">No &mdash; friends will hang at "Entering world"</span>
+      {% endif %}
+    </dd>
+  </div>
+</dl>
+{% endif %}
+{% endblock %}

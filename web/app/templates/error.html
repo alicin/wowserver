@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} &mdash; {{ server_name }}{% endblock %}
+
+{#
+  Errors say what happened and what to do about it, in the interface's voice. They do
+  not apologise and they do not guess.
+#}
+{% block content %}
+<p class="eyebrow">Something is missing</p>
+<p class="code">{{ status }}</p>
+<h1 class="page">
+  {% if status == 404 %}That page isn't here
+  {% elif status == 403 %}You can't open that
+  {% elif status == 429 %}Slow down
+  {% elif status == 503 %}Not ready yet
+  {% else %}Something went wrong
+  {% endif %}
+</h1>
+<p class="lede">{{ detail }}</p>
+<p><a class="button" href="{{ url_for('home') }}">Back to downloads</a></p>
+{% endblock %}
