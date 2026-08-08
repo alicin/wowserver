@@ -18,8 +18,8 @@ void DkLowLevelConfig::Load()
     // So a key absent from conf/modules/mod_dk_lowlevel.conf silently falls back to the literal
     // below, not to the .dist. That is why every knob is listed in the repo's .conf as well.
     FixAcherusTalents = sConfigMgr->GetOption<bool>("DKLowLevel.FixAcherusTalents", true);
-    DeathGateLevel    = sConfigMgr->GetOption<uint8>("DKLowLevel.DeathGateLevel", 1);
-    RuneforgingLevel  = sConfigMgr->GetOption<uint8>("DKLowLevel.RuneforgingLevel", 1);
+    DeathGateLevel    = sConfigMgr->GetOption<uint8>("DKLowLevel.DeathGateLevel", 30);
+    RuneforgingLevel  = sConfigMgr->GetOption<uint8>("DKLowLevel.RuneforgingLevel", 30);
 }
 
 namespace
@@ -255,7 +255,7 @@ void dk_lowlevel_worldscript::OnAfterConfigLoad(bool /*reload*/)
         sConfigMgr->GetOption<bool>("DKLowLevel.Enable", false),
         sDkLowLevelConfig.FixAcherusTalents,
         uint32(sDkLowLevelConfig.DeathGateLevel),
-        uint32(sDkLowLevelConfig.RuneforgingLevel),);
+        uint32(sDkLowLevelConfig.RuneforgingLevel));
 }
 
 void AddSC_dk_lowlevel()

@@ -42,7 +42,7 @@ static constexpr uint32 kDkProgressionCount =
 // silently rebind the player's hearthstone at every login, and 53431 is unnecessary because
 // learnSpell(53428) alone drives Player::addSpell's SKILL_RUNEFORGING branch
 // (Player.cpp:3377). 48778, the Acherus Deathcharger, is deliberately NOT here.
-static constexpr uint32 DK_SPELL_DEATH_GATE         = 50977;   // DKLowLevel.DeathGateLevel, default level 1
-static constexpr uint32 DK_SPELL_RUNEFORGING        = 53428;   // DKLowLevel.RuneforgingLevel, default level 1
+static constexpr uint32 DK_SPELL_DEATH_GATE         = 50977;   // DKLowLevel.DeathGateLevel, default level 30
+static constexpr uint32 DK_SPELL_RUNEFORGING        = 53428;   // DKLowLevel.RuneforgingLevel, default level 30
 
 #endif // MOD_DK_LOWLEVEL_DK_PROGRESSION_H

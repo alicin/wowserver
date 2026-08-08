@@ -317,10 +317,14 @@ CLASS_STATS_COLUMNS = ("Class", "Level", "BaseHP", "BaseMana",
 # the player's hearthstone wherever they logged in; casting 53431 is unnecessary because
 # learnSpell(53428) alone drives Player::addSpell's SKILL_RUNEFORGING branch
 # (Player.cpp:3377). Levels are config-overridable in the module; these are the defaults the
-# generated header carries for reference.
+# generated header carries. BOTH ARE 30 BECAUSE THE BRIEF SAYS 30 -- the progression table
+# the user specified reads "30: Path of Frost, Death Gate, Runeforging". An earlier draft
+# defaulted them to 1, which is not a neutral choice: Death Gate at level 1 drops a
+# fresh character into Acherus, which is exactly the starting experience this feature
+# exists to skip.
 UTILITY_SPELLS = (
-    ("DEATH_GATE", 50977, "DKLowLevel.DeathGateLevel", 1),
-    ("RUNEFORGING", 53428, "DKLowLevel.RuneforgingLevel", 1),
+    ("DEATH_GATE", 50977, "DKLowLevel.DeathGateLevel", 30),
+    ("RUNEFORGING", 53428, "DKLowLevel.RuneforgingLevel", 30),
     # RIDING IS ALREADY HANDLED BY STOCK DATA -- do not grant it here.
     # SkillLineAbility 19184 (skill 762 Riding, ClassMask 32, AcquireMethod 2) grants spell
     # 33391 Journeyman Riding to every Death Knight at character creation, and keeps re-granting
