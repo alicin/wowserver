@@ -62,6 +62,15 @@ section 6's; G8+ are additions this implementation makes.
       setting NameSubtext from the spec is a byte-level no-op on the clone.
   #14 every emitted value fits its column's declared type. This realm runs
       STRICT_TRANS_TABLES, so an out-of-range value aborts the migration part-way through.
+  #15 every race this realm lets a Death Knight be created as has a playercreateinfo row, an
+      action bar and a MALE AND FEMALE charstartoutfit_dbc row in the emitted SQL, and none of
+      those spawn points is map 609. A race missing from the spec is otherwise silent: it keeps
+      its stock rows and produces a level-1 character in Acherus in RequiredLevel 55 plate.
+  #16 the per-race template kit is one a level-1 Death Knight can actually wear -- every item
+      RequiredLevel <= 1, and at least one melee weapon that clears the proficiency gate at
+      PlayerStorage.cpp:2363 -- and the template class is the first entry in
+      spec.TEMPLATE_CLASS_PREFERENCE that satisfies that, so the two non-warrior choices are
+      re-derived rather than trusted.
 """
 
 import argparse
@@ -73,6 +82,7 @@ import shlex
 import struct
 import subprocess
 import sys
+import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -357,29 +367,78 @@ class Plan:
                 self.touched_ids["skilllineability_dbc"].add(sla_id)
 
     # ------------------------------------------------------- CharStartOutfit.dbc (A8/A13) --
+    def outfit_items(self, outfit_id):
+        """The positive ItemID_* cells of one CharStartOutfit row, in file order."""
+        table = dbc_tables.CHARSTARTOUTFIT_DBC
+        row = self.outfit.index()[outfit_id]
+        ids = (self.outfit.cell(row, table.index_of[f"ItemID_{k}"]) for k in range(1, 25))
+        return [i for i in ids if i > 0]
+
+    def _index_outfits_by_key(self):
+        """(RaceID, ClassID, SexID) -> outfit row id.
+
+        The same key GetCharStartOutfitEntry builds at DBCStores.cpp:880
+        (`race | class_ << 8 | gender << 16`). Resolving the row ids this way rather than
+        listing them is what makes the race table a list of races instead of a list of
+        magic numbers -- and it is the only way to be sure the ids are right, because the
+        DK block is not contiguous (races 6 and 7 are 348-351, races 1-5/8/10/11 are
+        352-367).
+        """
+        table = dbc_tables.CHARSTARTOUTFIT_DBC
+        cols = [table.index_of[n] for n in ("RaceID", "ClassID", "SexID")]
+        id_col = table.index_column()
+        out = {}
+        for row in range(len(self.outfit.records)):
+            key = tuple(self.outfit.cell(row, c) for c in cols)
+            # sCharStartOutfitMap is a std::map, so a second row with the same key would be
+            # silently unreachable and this generator would be patching a record the server
+            # never reads. The stock file has no duplicates; refuse to guess if that changes.
+            assert key not in out, f"duplicate CharStartOutfit key race/class/sex {key}"
+            out[key] = self.outfit.cell(row, id_col)
+        return out
+
     def _build_outfits(self):
         table = dbc_tables.CHARSTARTOUTFIT_DBC
         idx = self.outfit.index()
         key_cols = {table.index_of[n] for n in spec.OUTFIT_KEY_COLUMNS}
         id_col = table.index_column()
-        for dk_id, template_id in spec.START_OUTFITS:
-            dst, src = idx[dk_id], idx[template_id]
-            keys_before = {c: self.outfit.cell(dst, c) for c in key_cols}
-            for c in range(len(table.columns)):
-                if c == id_col or c in key_cols:
-                    continue          # keep 352/353's own race/class/sex/outfit
-                self.outfit.set_cell(dst, c, self.outfit.cell(src, c))
-            keys_after = {c: self.outfit.cell(dst, c) for c in key_cols}
-            self.checks.expect(keys_before == keys_after, "#11",
-                               f"CharStartOutfit {dk_id} keeps race/class/sex/outfit "
-                               f"{[keys_after[table.index_of[n]] for n in spec.OUTFIT_KEY_COLUMNS]}")
-            arrays_match = all(self.outfit.cell(dst, c) == self.outfit.cell(src, c)
-                               for c in range(len(table.columns))
-                               if c != id_col and c not in key_cols)
-            self.checks.expect(arrays_match, "#11",
-                               f"CharStartOutfit {dk_id} item arrays copied from {template_id}")
-            self.sql_rows["charstartoutfit_dbc"][dk_id] = self.outfit.row_values(dst)
-            self.touched_ids["charstartoutfit_dbc"].add(dk_id)
+        self.outfit_by_key = self._index_outfits_by_key()
+        # [(race id, sex, dk outfit id, template outfit id)], the emit order for A8.
+        self.start_outfits = []
+        for race in spec.DK_RACES:
+            for sex in spec.OUTFIT_SEXES:
+                dk_key = (race.race_id, spec.DK_CLASS, sex)
+                tpl_key = (race.race_id, race.template_class, sex)
+                missing = [k for k in (dk_key, tpl_key) if k not in self.outfit_by_key]
+                if not self.checks.expect(
+                        not missing, "#15",
+                        f"CharStartOutfit has a {race.name} DK row and a "
+                        f"{race.template_class_name} template row for sex {sex}",
+                        f"missing race/class/sex {missing}"):
+                    continue
+                dk_id = self.outfit_by_key[dk_key]
+                template_id = self.outfit_by_key[tpl_key]
+                self.start_outfits.append((race.race_id, sex, dk_id, template_id))
+                dst, src = idx[dk_id], idx[template_id]
+                keys_before = {c: self.outfit.cell(dst, c) for c in key_cols}
+                for c in range(len(table.columns)):
+                    if c == id_col or c in key_cols:
+                        continue      # keep the DK row's own race/class/sex/outfit
+                    self.outfit.set_cell(dst, c, self.outfit.cell(src, c))
+                keys_after = {c: self.outfit.cell(dst, c) for c in key_cols}
+                self.checks.expect(
+                    keys_before == keys_after, "#11",
+                    f"CharStartOutfit {dk_id} keeps race/class/sex/outfit "
+                    f"{[keys_after[table.index_of[n]] for n in spec.OUTFIT_KEY_COLUMNS]}")
+                arrays_match = all(self.outfit.cell(dst, c) == self.outfit.cell(src, c)
+                                   for c in range(len(table.columns))
+                                   if c != id_col and c not in key_cols)
+                self.checks.expect(
+                    arrays_match, "#11",
+                    f"CharStartOutfit {dk_id} item arrays copied from {template_id} "
+                    f"({race.name} {race.template_class_name})")
+                self.sql_rows["charstartoutfit_dbc"][dk_id] = self.outfit.row_values(dst)
+                self.touched_ids["charstartoutfit_dbc"].add(dk_id)
 
     # --------------------------------------------------------------- spell_ranks (A5/A6) --
     def _build_ranks(self):
@@ -619,53 +678,89 @@ def emit_spells(plan):
 
 
 def emit_createinfo(plan, db, checks):
-    """A7 playercreateinfo, A8 charstartoutfit_dbc, A9 action bar, A10 cast spell."""
-    src = db.query(
-        "SELECT CAST(position_x AS DOUBLE), CAST(position_y AS DOUBLE), "
-        "CAST(position_z AS DOUBLE), CAST(orientation AS DOUBLE) FROM playercreateinfo "
-        f"WHERE race = {spec.DK_RACE} AND class = {spec.TEMPLATE_CLASS}")
-    checks.expect(len(src) == 1, "A7",
-                  f"read the race {spec.DK_RACE} class {spec.TEMPLATE_CLASS} spawn point "
-                  "from the live DB")
-    assert len(src) == 1, "no template playercreateinfo row to copy the spawn point from"
-    # CAST(... AS DOUBLE) hands back the exact double value of the stored float32; f32_text
-    # then finds the shortest decimal that reproduces those same 32 bits.
-    pos = [f32(float(v)) for v in src[0]]
-    pos_text = [f32_text(v) for v in pos]
-    for text, value in zip(pos_text, pos):
-        assert struct.pack("<f", float(text)) == struct.pack("<f", value)
-    checks.ok("A7", "spawn point round-trips to identical float32 bits: "
-                    + " ".join(pos_text))
+    """A7 playercreateinfo, A8 charstartoutfit_dbc, A9 action bar, A10 cast spell.
+
+    All four are emitted for EVERY Death-Knight-capable race, from spec.DK_RACES. Nothing in
+    here is race 1 specific any more; the Human rows it produces are byte-identical to the ones
+    the Human-only slice produced, which is the regression test for this generalisation.
+    """
+    spawn, race_notes = {}, []
+    for race in spec.DK_RACES:
+        src = db.query(
+            "SELECT map, zone, CAST(position_x AS DOUBLE), CAST(position_y AS DOUBLE), "
+            "CAST(position_z AS DOUBLE), CAST(orientation AS DOUBLE) FROM playercreateinfo "
+            f"WHERE race = {race.race_id} AND class = {race.template_class}")
+        checks.expect(len(src) == 1, "A7",
+                      f"read the race {race.race_id} ({race.name}) class "
+                      f"{race.template_class} ({race.template_class_name}) spawn point "
+                      "from the live DB")
+        assert len(src) == 1, (
+            f"no playercreateinfo row for race {race.race_id} class {race.template_class} to "
+            "copy the spawn point from")
+        map_id, zone_id = int(src[0][0]), int(src[0][1])
+        # CAST(... AS DOUBLE) hands back the exact double value of the stored float32; f32_text
+        # then finds the shortest decimal that reproduces those same 32 bits.
+        pos = [f32(float(v)) for v in src[0][2:]]
+        for text, value in zip((f32_text(v) for v in pos), pos):
+            assert struct.pack("<f", float(text)) == struct.pack("<f", value)
+        # The whole point of A7 is being somewhere that is not Ebon Hold. Asserting that
+        # directly is stronger than hardcoding a destination map, and it survives a template
+        # class change.
+        checks.expect(map_id != spec.FORBIDDEN_CREATE_MAP, "A7",
+                      f"race {race.race_id} {race.name} spawns on map {map_id} zone {zone_id}, "
+                      f"not {spec.FORBIDDEN_CREATE_MAP} (Ebon Hold): "
+                      + " ".join(f32_text(v) for v in pos))
+        spawn[race.race_id] = (map_id, zone_id, pos)
+        race_notes.append(
+            f"--   {race.race_id:>2} {race.name:<10} <- class {race.template_class} "
+            f"{race.template_class_name:<8} map {map_id:>3} zone {zone_id:>4}")
+        # The two non-warrior templates carry their reason inline. Wrapped rather than left as
+        # one long line so the migration stays readable in a terminal-width diff.
+        race_notes.extend(f"--                 {line}"
+                          for line in textwrap.wrap(race.why, 74))
 
     parts = [BANNER.format(name=spec.SQL_FILES["createinfo"])]
 
-    parts.append(f"""--
--- A7. Spawn a Human Death Knight in Northshire instead of Acherus.
+    race_list = ", ".join(str(r.race_id) for r in spec.DK_RACES)
+    parts.append("""--
+-- A7. Spawn every Death Knight in their own race's starting zone instead of Acherus.
 --
--- This one row does three jobs. It makes the entire Death Knight starter chain unreachable
+-- These rows do three jobs each. They make the entire Death Knight starter chain unreachable
 -- (every questgiver for quests 12593..12801 spawns only on map 609, there are zero
 -- areatrigger_teleport rows targeting 609, and every chain quest is MinLevel 55, so nothing
--- has to be deleted or disabled); it keeps Player::CalculateTalentsPoints on its normal
--- branch instead of the map-609 branch that refunds every talent point; and it sets the
+-- has to be deleted or disabled); they keep Player::CalculateTalentsPoints on its normal
+-- branch instead of the map-609 branch that refunds every talent point; and they set the
 -- homebind (PlayerStorage.cpp:7187-7191).
 --
--- Coordinates are copied from the race {spec.DK_RACE} class {spec.TEMPLATE_CLASS} row in this
--- realm's own playercreateinfo, printed at the shortest precision that reproduces the stored
--- float32 exactly.
+-- Map, zone AND coordinates are copied from that race's own template row in this realm's
+-- playercreateinfo -- never typed in -- and the floats are printed at the shortest precision
+-- that reproduces the stored float32 exactly. Warrior is the template everywhere it exists and
+-- its kit is usable; the two exceptions are derived, not chosen, and re-derived by invariant
+-- #16 on every run:
+--
+--   race  name       template                 destination
+"""
+                 + "\n".join(race_notes) + """
 --
 -- DELETE + INSERT rather than UPDATE: an UPDATE against a missing row succeeds and does
 -- nothing, which is the failure mode this whole feature cannot afford.
 
-DELETE FROM `playercreateinfo` WHERE `race` = {spec.DK_RACE} AND `class` = {spec.DK_CLASS};
-{_insert_values('playercreateinfo',
-                ('race', 'class', 'map', 'zone', 'position_x', 'position_y', 'position_z',
-                 'orientation'),
-                [[spec.DK_RACE, spec.DK_CLASS, spec.CREATE_MAP, spec.CREATE_ZONE] + pos])}""")
+DELETE FROM `playercreateinfo` WHERE `class` = """ + str(spec.DK_CLASS)
+                 + f" AND `race` IN ({race_list});\n"
+                 + _insert_values(
+                     'playercreateinfo',
+                     ('race', 'class', 'map', 'zone', 'position_x', 'position_y', 'position_z',
+                      'orientation'),
+                     [[r.race_id, spec.DK_CLASS, spawn[r.race_id][0], spawn[r.race_id][1]]
+                      + spawn[r.race_id][2] for r in spec.DK_RACES]))
 
+    template_by_dk = {dk_id: (race_id, sex, tpl_id)
+                      for race_id, sex, dk_id, tpl_id in plan.start_outfits}
     outfit_ids = sorted(plan.sql_rows["charstartoutfit_dbc"])
-    template_by_dk = dict(spec.START_OUTFITS)
+    n_out, n_races = len(outfit_ids), len(spec.DK_RACES)
+    n_cols = len(dbc_tables.CHARSTARTOUTFIT_DBC)
     parts.append(f"""--
--- A8. charstartoutfit_dbc -- {len(outfit_ids)} rows, {len(dbc_tables.CHARSTARTOUTFIT_DBC)} columns each.
+-- A8. charstartoutfit_dbc -- {n_out} rows ({n_races} races x male/female), {n_cols} columns each.
 --
 -- The starting kit comes from CharStartOutfit.dbc, not from playercreateinfo_item. The one
 -- existing DK row there, (0, 6, 40582, -1), is a REMOVAL directive: negative counts route
@@ -673,34 +768,50 @@ DELETE FROM `playercreateinfo` WHERE `race` = {spec.DK_RACE} AND `class` = {spec
 -- itemId inside the CharStartOutfit entry. Doing this as eighteen negative rows plus a
 -- positive kit would log an error per miss; overriding the outfit row is cleaner.
 --
--- Stock rows 352/353 are the Human DK kit: eighteen items, every 346xx piece RequiredLevel 55
--- plate. Rows 1/14 are the Human warrior kit, whose Worn Greatsword (49778) is
--- RequiredLevel 1 and which a DK can equip -- playercreateinfo_skills gives classMask 35
--- skill 55 (Two-Handed Swords).
+-- Every stock class-6 row is the SAME kit regardless of race: eighteen items, every 346xx
+-- piece RequiredLevel 55 plate. Each is replaced by that race's own template kit, whose
+-- weapon a level-1 Death Knight is proficient with -- checked item by item against
+-- PlayerStorage.cpp:2363 by invariant #16, not assumed.
 --
--- RaceID/ClassID/SexID/OutfitID are NOT copied; 352/353 already carry the right ones. Only
+-- Row ids are resolved out of the DBC by (RaceID, ClassID, SexID), the key
+-- GetCharStartOutfitEntry uses at DBCStores.cpp:880, because the DK block is not contiguous:
+-- Tauren and Gnome are 348-351, everyone else is 352-367.
+--
+-- RaceID/ClassID/SexID/OutfitID are NOT copied; the DK rows already carry the right ones. Only
 -- the ItemID / DisplayItemID / InventoryType arrays move. Note that DisplayItemID and
 -- InventoryType are `x` (FT_NA) in CharStartOutfitEntryfmt: the server discards them, the
 -- client character-create preview uses them, and they still occupy a required SQL column.""")
     for oid in outfit_ids:
+        race_id, sex, tpl_id = template_by_dk[oid]
+        race = spec.race_by_id(race_id)
         parts.append(f"DELETE FROM `charstartoutfit_dbc` WHERE `ID` = {oid};   "
-                     f"-- copied from stock outfit {template_by_dk[oid]}")
+                     f"-- {race.name} {'female' if sex else 'male'}, copied from stock outfit "
+                     f"{tpl_id} ({race.template_class_name})")
         parts.append(_insert_set("charstartoutfit_dbc",
                                  dbc_tables.CHARSTARTOUTFIT_DBC.columns,
                                  plan.sql_rows["charstartoutfit_dbc"][oid]))
 
     rank1 = spec.ABILITIES[0].ranks[0]
+    action_rows = [[r.race_id, spec.DK_CLASS, b, a, t]
+                   for r in spec.DK_RACES for b, a, t in spec.action_bar_for(r)]
+    racial_notes = "\n".join(
+        f"--   {r.race_id:>2} {r.name:<10} button {r.racial_button:>2}  "
+        f"{r.racial_spell:>5}  {r.racial_name}" for r in spec.DK_RACES)
+    btn, dmg = spec.ACTION_BUTTON_RANK1, f"{rank1.damage_min} to {rank1.damage_max}"
     parts.append(f"""--
--- A9. Action bar for a new Human Death Knight.
+-- A9. Action bar for a new Death Knight of each race -- {len(action_rows)} rows.
 --
--- Button 1 holds the custom rank ({rank1.spell_id}), so the acceptance test -- hover it and
--- read "{rank1.damage_min} to {rank1.damage_max} Frost damage" -- needs no setup. The stock
--- rows handed out 45477/45462/45902/47541/49576, all level 55 abilities the character will
--- not know. 6603 is Attack; 59752 is Every Man for Himself.
+-- Button {btn} holds the custom rank ({rank1.spell_id}), so the acceptance test -- hover it
+-- and read "{dmg} Frost damage" -- needs no setup. The stock rows handed out
+-- 45477/45462/45902/47541/49576, all level 55 abilities the character will not know.
+-- {spec.ATTACK_SPELL} is Attack. The third button is the race's own racial, on the slot and
+-- with the spell Blizzard shipped for that race's Death Knight; the slot is not uniform:
+--
+{racial_notes}
 
-DELETE FROM `playercreateinfo_action` WHERE `race` = {spec.DK_RACE} AND `class` = {spec.DK_CLASS};
+DELETE FROM `playercreateinfo_action` WHERE `class` = {spec.DK_CLASS} AND `race` IN ({race_list});
 {_insert_values('playercreateinfo_action', ('race', 'class', 'button', 'action', 'type'),
-                [[spec.DK_RACE, spec.DK_CLASS, b, a, t] for b, a, t in spec.ACTION_BAR])}""")
+                action_rows)}""")
 
     del_lines = "\n".join(
         f"DELETE FROM `playercreateinfo_cast_spell` WHERE `raceMask` = {rm} "
@@ -1133,6 +1244,182 @@ def check_reapplyable(sql_paths, checks):
                       "; ".join(problems))
 
 
+def check_race_coverage(sql_paths, db, checks):
+    """#15 -- every DK-capable race has a createinfo row, an action bar and an outfit PAIR.
+
+    THE POINT OF THIS CHECK. A race that is simply missing from spec.DK_RACES does not fail
+    loudly anywhere else: it keeps its stock playercreateinfo row, which is map 609 zone 4298,
+    and it keeps its stock CharStartOutfit rows, which are eighteen pieces of RequiredLevel 55
+    plate. That is a character created at level 1, standing in Acherus, wearing gear they cannot
+    use, with an action bar full of abilities they do not know -- exactly the state this feature
+    exists to prevent, produced silently. So the build fails instead.
+
+    "DK-capable" is not a constant. It is read from the live DB: the set of races that have a
+    class-6 playercreateinfo row, which is precisely the set CharacterHandler will accept a DK
+    creation for (ObjectMgr::GetPlayerInfo is nullptr otherwise). Both blood elves and draenei
+    are in it -- ChrRaces.dbc field 68 gives them expansion 1, this realm's accounts are
+    expansion 2, and CharacterHandler.cpp:309 only rejects `raceEntry->expansion > Expansion()`.
+    """
+    created, actioned, outfitted = {}, {}, {}
+    for path in sql_paths:
+        for kind, table, payload in parse_emitted_sql(path):
+            if kind != "insert":
+                continue
+            if table == "playercreateinfo" and payload["class"] == spec.DK_CLASS:
+                created[payload["race"]] = (payload["map"], payload["zone"])
+            elif table == "playercreateinfo_action" and payload["class"] == spec.DK_CLASS:
+                actioned.setdefault(payload["race"], set()).add(payload["button"])
+            elif table == "charstartoutfit_dbc" and payload["ClassID"] == spec.DK_CLASS:
+                outfitted.setdefault(payload["RaceID"], set()).add(payload["SexID"])
+
+    spec_races = {r.race_id for r in spec.DK_RACES}
+    for race_id in sorted(spec_races):
+        race = spec.race_by_id(race_id)
+        checks.expect(race_id in created, "#15",
+                      f"race {race_id} {race.name}: playercreateinfo row emitted")
+        checks.expect(created.get(race_id, (spec.FORBIDDEN_CREATE_MAP,))[0]
+                      != spec.FORBIDDEN_CREATE_MAP, "#15",
+                      f"race {race_id} {race.name}: emitted spawn is off map "
+                      f"{spec.FORBIDDEN_CREATE_MAP}",
+                      f"map {created.get(race_id, ('?',))[0]}")
+        checks.expect(outfitted.get(race_id) == set(spec.OUTFIT_SEXES), "#15",
+                      f"race {race_id} {race.name}: charstartoutfit_dbc pair emitted "
+                      f"(sexes {sorted(spec.OUTFIT_SEXES)})",
+                      f"got sexes {sorted(outfitted.get(race_id, ()))}")
+        want_buttons = {b for b, _a, _t in spec.action_bar_for(race)}
+        checks.expect(actioned.get(race_id) == want_buttons, "#15",
+                      f"race {race_id} {race.name}: action bar emitted "
+                      f"(buttons {sorted(want_buttons)})",
+                      f"got {sorted(actioned.get(race_id, ()))}")
+
+    if db is not None and db.live():
+        live = {int(r[0]) for r in
+                db.query(f"SELECT race FROM playercreateinfo WHERE class = {spec.DK_CLASS}")}
+        checks.expect(live == spec_races, "#15",
+                      f"spec covers exactly the {len(live)} races this realm lets a Death "
+                      f"Knight be created as: {sorted(live)}",
+                      f"live-only {sorted(live - spec_races)} spec-only "
+                      f"{sorted(spec_races - live)}")
+    else:
+        checks.skip("#15", "no live DB: cannot re-derive the DK-capable race set")
+
+
+def check_template_kits(plan, db, checks):
+    """#16 -- each race's template kit is one a LEVEL 1 Death Knight can actually wear.
+
+    Reproduces the two gates that decide what a new character ends up holding:
+
+      * PlayerStorage.cpp:2343-2365 -- `GetSkillValue(item->GetSkill()) == 0` returns
+        EQUIP_ERR_NO_REQUIRED_PROFICIENCY, where GetSkill() is the item Class/SubClass ->
+        SkillLine map at ItemTemplate.h:782-815 (transcribed into dk_spec).
+      * Player::StoreNewItemInBestSlots (Player.cpp:759-792) -- an item that fails to equip is
+        NOT an error, it goes quietly into the backpack. That is what makes this worth checking
+        mechanically: the failure mode is a character who spawns holding nothing, with no log
+        line anywhere.
+
+    A Death Knight's starting skills come from playercreateinfo_skills via LearnDefaultSkills
+    (Player.cpp:622), filtered by racemask and classmask, so the answer is per race.
+    """
+    dk_classmask = 1 << (spec.DK_CLASS - 1)
+    skill_rows = [(int(a), int(b), int(c)) for a, b, c in
+                  db.query("SELECT racemask, classmask, skill FROM playercreateinfo_skills")]
+    classes_by_race = {}
+    for r, c in db.query("SELECT race, class FROM playercreateinfo"):
+        classes_by_race.setdefault(int(r), set()).add(int(c))
+
+    # One query for every item any candidate kit could contain, rather than one per kit.
+    wanted = set()
+    for race in spec.DK_RACES:
+        for cls in spec.TEMPLATE_CLASS_PREFERENCE:
+            row_id = plan.outfit_by_key.get((race.race_id, cls, 0))
+            if row_id is not None:
+                wanted |= set(plan.outfit_items(row_id))
+    protos = {}
+    if wanted:
+        for row in db.query(
+                "SELECT entry, class, subclass, InventoryType, RequiredLevel, AllowableClass "
+                "FROM item_template WHERE entry IN ("
+                + ",".join(str(i) for i in sorted(wanted)) + ")"):
+            protos[int(row[0])] = tuple(int(v) for v in row[1:])
+
+    def usable(item_id, skills):
+        proto = protos.get(item_id)
+        if proto is None:
+            return False, 0             # unknown item: ObjectMgr skips it, so does the player
+        item_class, subclass, inv_type, req_level, allow = proto
+        need = spec.item_required_skill(item_class, subclass)
+        ok = ((need == 0 or need in skills) and req_level <= 1
+              and (allow == -1 or bool(allow & dk_classmask)))
+        return ok, inv_type
+
+    def kit_weapon(race_id, cls, skills):
+        """The first melee weapon in this kit a level-1 DK can hold, 0 if none, None if the
+        kit is not a candidate at all (race cannot be that class, or the pair is incomplete).
+
+        BOTH sexes have to arm the character. They carry the same items in every stock kit,
+        but "in every stock kit" is an observation about today's DBC, not a guarantee, and
+        checking the male row only would let a female-specific gap through silently.
+        """
+        if cls not in classes_by_race.get(race_id, ()):
+            return None
+        rows = [plan.outfit_by_key.get((race_id, cls, s)) for s in spec.OUTFIT_SEXES]
+        if any(r is None for r in rows):
+            return None
+        found = set()
+        for row in rows:
+            found.add(next((i for i in plan.outfit_items(row)
+                            if usable(i, skills)[0]
+                            and usable(i, skills)[1] in spec.MELEE_INVENTORY_TYPES), 0))
+        return 0 if 0 in found else sorted(found)[0]
+
+    for race in spec.DK_RACES:
+        rmask = 1 << (race.race_id - 1)
+        skills = {s for rm, cm, s in skill_rows
+                  if (cm == 0 or cm & dk_classmask) and (rm == 0 or rm & rmask)}
+
+        weapon = kit_weapon(race.race_id, race.template_class, skills)
+        checks.expect(bool(weapon), "#16",
+                      f"race {race.race_id} {race.name}: the {race.template_class_name} kit "
+                      f"arms a level-1 DK (item {weapon})",
+                      "no melee weapon in the kit passes PlayerStorage.cpp:2363 for class 6"
+                      if weapon == 0 else
+                      f"class {race.template_class} is not a candidate kit for this race")
+
+        # DELIBERATELY NOT "must be the first class in preference order that passes".
+        #
+        # An earlier version asserted that, and it was too strong -- it made this generator's
+        # correctness depend on ANOTHER module's data. mod-autolearn adds creation-time
+        # playercreateinfo_skills rows granting Death Knights skills 54 and 160 (one- and
+        # two-handed maces), which is blizzlike: WotLK DKs really are mace-proficient and
+        # AzerothCore's stock data is the thing that is wrong. With those rows applied, the
+        # Tauren WARRIOR kit and its Battleworn Hammer become equippable, warrior wins the
+        # preference order, and this assertion failed -- even though nothing about the Tauren
+        # Death Knight had changed or broken.
+        #
+        # What actually matters is the property the user cares about: the character spawns
+        # ARMED. So assert exactly that, against STOCK creation-time proficiencies only. The
+        # Hunter kit satisfies it whether or not mod-autolearn is installed, which is the point:
+        # a Tauren DK must not become unarmed because someone disabled an unrelated module.
+        first = next((c for c in spec.TEMPLATE_CLASS_PREFERENCE
+                      if kit_weapon(race.race_id, c, skills)), None)
+        if first != race.template_class:
+            checks.ok("#16",
+                        f"race {race.race_id} {race.name}: kit is class "
+                        f"{race.template_class} ({race.template_class_name}); class {first} "
+                        f"would also arm it. Both work -- this one is chosen because it holds "
+                        f"under stock proficiencies alone.")
+
+        # And nothing in the kit may be level-gated. A RequiredLevel 55 piece is the Acherus
+        # failure all over again, just with different item ids.
+        row_id = plan.outfit_by_key.get((race.race_id, race.template_class, 0))
+        gated = [i for i in (plan.outfit_items(row_id) if row_id is not None else [])
+                 if protos.get(i) and protos[i][3] > 1]
+        checks.expect(not gated, "#16",
+                      f"race {race.race_id} {race.name}: every item in the "
+                      f"{race.template_class_name} kit is RequiredLevel <= 1",
+                      f"level-gated items {gated}")
+
+
 def check_class_stats(sql_path, db, checks):
     """#8 -- 54 dense rows for class 6 that equal the live class 1 rows."""
     rows = [p for k, t, p in parse_emitted_sql(sql_path)
@@ -1224,6 +1511,7 @@ def do_emit(args, checks):
     check_ranks(plan, checks)
     check_chain_not_orphaning(plan, db, checks)
     check_acquire_methods(plan, checks)
+    check_template_kits(plan, db, checks)
 
     print(f"\n== SQL -> {os.path.relpath(spec.SQL_DIR, spec.REPO_ROOT)}")
     os.makedirs(spec.SQL_DIR, exist_ok=True)
@@ -1275,6 +1563,7 @@ def do_emit(args, checks):
     check_sql_matches_dbc(sql_paths, dbcs, plan, checks)
     check_reapplyable(sql_paths, checks)
     check_value_ranges(sql_paths, db, checks)
+    check_race_coverage(sql_paths, db, checks)
     check_class_stats(os.path.join(spec.SQL_DIR, spec.SQL_FILES["class_stats"]), db, checks)
     _check_header(header_path, checks)
 
@@ -1341,6 +1630,7 @@ def do_check(args, checks):
     db = Db(args.mysql_cmd)
     live = db.live()
     check_value_ranges(sql_paths, db if live else None, checks)
+    check_race_coverage(sql_paths, db if live else None, checks)
     if live:
         check_schema_against_db(db, checks)
     else:
@@ -1361,7 +1651,7 @@ def do_check(args, checks):
     have_stock = os.path.isdir(args.dbc_in)
 
     if not have_stock:
-        for tag in ("#2", "#3", "#4", "#5", "#6", "#12"):
+        for tag in ("#2", "#3", "#4", "#5", "#6", "#12", "#16"):
             checks.skip(tag, f"stock DBCs not readable at {args.dbc_in}; "
                              "pass --dbc-in to enable the DBC-side checks")
         return checks.summary()
@@ -1376,6 +1666,10 @@ def do_check(args, checks):
     else:
         checks.skip("#5", "no live DB: cannot check the DELETE against today's spell_ranks")
     check_acquire_methods(plan, checks)
+    if live:
+        check_template_kits(plan, db, checks)
+    else:
+        checks.skip("#16", "no live DB: cannot re-derive the per-race template kits")
 
     if have_emitted:
         print(f"\n== SQL vs the emitted DBCs in {os.path.relpath(args.out, spec.REPO_ROOT)}")

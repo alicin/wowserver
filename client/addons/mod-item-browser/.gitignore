@@ -1,0 +1,3 @@
+# Byte-compiled generator modules; itemdb.py gets imported by ad-hoc scripts.
+__pycache__/
+*.pyc

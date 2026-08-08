@@ -1,0 +1,38 @@
+# Client addon manifest for the WotLK 3.3.5a pack.  scripts/client-addons.sh consumes this.
+#
+# Fields:  owner/repo   ref   mode   [name]
+#   mode=dirs         every top-level directory containing a .toc becomes an AddOns folder.
+#   mode=root:NAME    the repo root IS the addon; it is installed as AddOns/NAME.
+#                     NAME matters -- Questie's .toc references Questie-335 and silently
+#                     fails to load from any other folder name.
+#   mode=local:NAME   field 1 is a REPO-RELATIVE DIRECTORY, not a GitHub repo: an addon
+#                     written here rather than fetched. Nothing is downloaded and there is
+#                     no SHA to pin, because this repo's own history is the pin -- write
+#                     '-' in the ref and sha columns. Installed as AddOns/NAME.
+# ref is documentation; the SHA is what gets fetched. Pinned for the same reason
+# build/modules.txt is: a client pack you hand three people must be reproducible.
+#
+# repo                                         ref      mode             sha
+NeticSoul/DragonUI                             main     dirs             0dc4808fb3220c29c918fad1ba26c3798588c46b
+Zidras/DBM-Warmane                             main     dirs             77d541d7a7f6b080e75fec135518d984091478b8
+Bunny67/WeakAuras-WotLK                        master   dirs             58c99532640eea021c0b07478469a9e7e612a54e
+Aldori15/Questie                               335      root:Questie-335 1e38a8ce7ddaa3b9ba37454954af511dfa1ba49e
+bkader/Skada-WoTLK                             main     dirs             5653a241a7a97a5988280d916ff3a9e31ec55948
+NoM0Re/OmniCC-WotLK                            main     dirs             0564580a6f8c3a539a37990c7191a66339c51117
+Sattva-108/AdiBags                             main     root:AdiBags     d8b49ed56ddf81825ab2a4bc22c08fb7a0d59eed
+alchem1ster/WotLK-Auctionator                  main     dirs             b4e3eb68dcc7cc1142b73d8a978d471bf0d4110a
+migwynkriid/CleanerChat-WotLK                  main     root:CleanerChat 56d0b268389b37b5f0397729920f3034cbe499d4
+Arcitec/GearScoreLite_Reborn                   main     dirs             a396cdc93894bca2cab351627c97996253f86236
+Wishmaster117/MultiBot-Chatless                main     root:MultiBot    8c082749bf38913421975c80b2ac5ef41603d780
+bkader/Talented_WoTLK                          main     dirs             648a0ead7d664f3b220088738bc1c7e6041be090
+stevemcqueenz/gathermate-and-database-3.3.5a   master   dirs             b102c388c61571240ce5f786e2ac5a739e36d474
+
+# Written in this repo. Its Data/ is generated from the live world DB by
+# client/addons/mod-item-browser/tools/regen.sh -- regenerate before cutting a client pack
+# if item_template has changed, or friends browse a database the server no longer agrees with.
+client/addons/mod-item-browser/ItemBrowser    -        local:ItemBrowser -
+# AzerothAdmin must be root: -- its .toc is at the repo root, and mode=dirs would find no addon
+# there while happily installing Libraries/ as a top-level AddOn (Libraries/Ace3.toc satisfies the
+# installer's .toc test). The folder name is load-bearing: 4 hardcoded Interface\AddOns\AzerothAdmin
+# paths in the Lua, and _build/AzerothAdmin_Models/*.toc declares "Dependencies: AzerothAdmin".
+superstyro/AzerothAdmin                        master   root:AzerothAdmin eeda6f77fd44a8ad2a1a5f4a6138fefa19029c73

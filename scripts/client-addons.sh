@@ -29,21 +29,33 @@ is_junk() { case "${1,,}" in .github|.git|licenses|docs|spec|tools|screenshots|i
 while read -r repo ref mode sha; do
     [[ -z "${repo:-}" || "$repo" == \#* ]] && continue
     name="${repo##*/}"
-    echo "== $repo @ ${sha:0:10}"
 
-    # codeload tarballs work for any SHA and need no git or auth.
-    if ! curl -fsSL "https://codeload.github.com/$repo/tar.gz/$sha" -o "$TMP/$name.tgz"; then
-        echo "   !! download failed, skipping" >&2; continue
+    if [[ "$mode" == local:* ]]; then
+        # Addons written IN this repo rather than fetched. Field 1 is a repo-relative source
+        # directory, and there is nothing to download or pin -- the git history of this repo
+        # is the pin. Everything downstream (rm -rf then copy, the .toc-bearing check, the
+        # folder count) is unchanged, so a local addon is as reproducible as a pinned one.
+        src="$REPO/$repo"
+        echo "== $repo (local)"
+        if [[ ! -d "$src" ]]; then
+            echo "   !! no such directory: $src" >&2; continue
+        fi
+    else
+        echo "== $repo @ ${sha:0:10}"
+        # codeload tarballs work for any SHA and need no git or auth.
+        if ! curl -fsSL "https://codeload.github.com/$repo/tar.gz/$sha" -o "$TMP/$name.tgz"; then
+            echo "   !! download failed, skipping" >&2; continue
+        fi
+        src="$TMP/$name"; mkdir -p "$src"
+        tar -xzf "$TMP/$name.tgz" -C "$src" --strip-components=1
     fi
-    src="$TMP/$name"; mkdir -p "$src"
-    tar -xzf "$TMP/$name.tgz" -C "$src" --strip-components=1
 
     case "$mode" in
-      root:*)
-        # The repo root is the addon. The FOLDER NAME IS LOAD-BEARING: WoW matches
+      root:*|local:*)
+        # The source directory IS the addon. The FOLDER NAME IS LOAD-BEARING: WoW matches
         # AddOns/<Name>/<Name>.toc, and Questie in particular fails silently under any name
         # other than Questie-335.
-        dest="${mode#root:}"
+        dest="${mode#*:}"
         rm -rf "${ADDONS:?}/$dest"
         mkdir -p "$ADDONS/$dest"
         # Copy contents, dropping repo furniture that would confuse the addon scanner.

@@ -1,0 +1,18 @@
+## Interface: 30300
+## Title: Item Browser
+## Notes: GM item search with icons and tooltips, and one button to hand an item to your target.
+## Author: wowserver
+## Version: 1.0
+## SavedVariables: ItemBrowserSaved
+## DefaultState: enabled
+
+# Load order matters.
+#   Data.lua declares ItemBrowserData and the Chunk() the generated shards call, so it must
+#   come before Data\Data.xml.
+#   Data\Data.xml is GENERATED (tools/itemdb.py) and lists the shard files. Pointing the .toc
+#   at the XML rather than at the shards means changing --shard-rows never edits this file.
+Data.lua
+Data\Data.xml
+Search.lua
+Transport.lua
+UI.xml

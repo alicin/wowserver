@@ -8,7 +8,11 @@ deploy/mysql-backup.cnf
 deploy/mysql-init/01-databases.sql
 
 # Generated / large
-client/
+#
+# NOT `client/`. That rule was written anticipating a stored game client, but the client lives
+# at /home/ali/games/wow-3.3.5a and never came here -- so all it actually did was silently
+# untrack client/addons.txt (the pinned addon manifest) and client/addons/ (addons authored in
+# this repo). Large client artefacts are already covered by *.zip and *.MPQ below.
 data/
 backups/
 build/cache/

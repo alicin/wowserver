@@ -550,6 +550,111 @@ The only real fallback, if you'd rather not add a module: take `whipowill/wow-ad
 accept that it's a 2023 chat-command wrapper, and lean on the ~100 `/bot` chat commands directly.
 Nothing about `mod-playerbots` requires a client addon at all.
 
+### AzerothAdmin — the in-game GM panel
+
+[superstyro/AzerothAdmin](https://github.com/superstyro/AzerothAdmin) — 67★, GPLv3,
+`## Interface: 30300`, pushed 2026-07-19, not archived. A GUI over AzerothCore's dot-commands,
+descended from TrinityAdmin/MangAdmin. Eight tabs (`Frames/Frames_Section*.lua`): **Main, Char,
+NPC, GO, Tele, Ticket, Misc, Server** — buttons, sliders, dropdowns and search popups instead of
+remembering `.modify speed all 3.5`, `.npc add`, `.gobject set phase` and `.tele add`.
+
+**Pure client-side. No server module, no SQL, nothing added to `build/`.** Every button funnels
+into `AzerothAdmin:ChatMsg()` (`Core/AzerothAdmin.lua:1383`), which is a thin wrapper over
+`SendChatMessage(msg, "say")`; the server's replies come back by `RawHook`-ing `AddMessage` on all
+`NUM_CHAT_WINDOWS` chat frames (`Core/AzerothAdmin.lua:224`) and pattern-matching the system
+messages. It is exactly what you would type by hand, so it works against the stock server as
+installed. Contrast MultiBot-Chatless above, which genuinely does need `mod-multibot-bridge` — the
+two are not comparable in cost.
+
+**No other addon or library required.** Ace3, `FrameLib-1.0` and `Graph-1.0` are vendored under
+`Libraries/` and loaded by path from the `.toc`; `## OptionalDeps: Ace3` only means a standalone
+Ace3 is reused when some other addon already loaded it. The minimap button asks
+`LibStub("LibDBIcon-1.0", true)` and silently skips itself if nothing provides it.
+
+**Opening it:** `/aa` or `/azerothadmin`, or the minimap button. Shift-clicking either reloads the
+UI (`Core/AzerothAdmin.lua:381`) — deliberate, not a bug. Escape closes the frames.
+
+#### GM level
+
+The addon does no gating of its own — it fires the command and lets the server refuse. Resolved
+against this realm's own `acore_auth` RBAC tables (`rbac_default_permissions` →
+`rbac_linked_permissions`):
+
+| What you want to use | Role that grants it | Minimum `gmlevel` |
+|---|---|---|
+| Ticket tab (`.ticket …`) | Moderator Commands (198) | **1** |
+| Char / NPC / GO / Tele / Misc — `.gm`, `.additem`, `.modify speed`, `.character level`, `.learn all …`, `.npc add`, `.gobject add`, `.tele add` | Gamemaster Commands (197) | **2** |
+| Server tab — `.reload`, `.reload smart`, `.server restart`, `.server shutdown` — and `.account set gmlevel` | Administrator Commands (196) | **3** |
+
+**Take 3.** At 1 or 2 the higher tabs are still fully drawn and clickable — nothing greys out — so
+a permission refusal reads as an addon bug. Granting it is [bring-up.md §7.2](bring-up.md#72-gm-level)
+(`.account set gmlevel ALI 3 -1` from the `AC>` console); do not raise your friends' accounts to
+run this addon, one admin is enough.
+
+Two behaviours worth knowing before you hand the panel to someone at level 0:
+
+- A dot-command the account may not use is **swallowed, not spoken**, because this server leaves
+  `AllowPlayerCommands` at its default of `1` (`WorldConfig.cpp:165`) and the core then answers
+  "no such command" instead of falling through to normal chat (`Chat.cpp:242`,
+  `ChatHandler.cpp:307`). Set that key to `0` and the same click broadcasts `.gm on` to everyone in
+  `/say` — a reason not to change it.
+- The search popups scrape `.lookup …` output out of the chat frame, and `Command.LookupMaxResults`
+  defaults to `0` = unlimited (`cs_lookup.cpp:133`). A two-letter item search dumps thousands of
+  lines. Search with a real substring.
+
+#### Manifest entry
+
+```
+superstyro/AzerothAdmin   master   root:AzerothAdmin   eeda6f77…
+```
+
+`root:`, not `dirs`, and the folder name is not negotiable:
+
+- `AzerothAdmin.toc` sits at the repo root, so `dirs` would find no addon there at all — and would
+  still install something, because `Libraries/Ace3.toc` satisfies the installer's "a directory
+  containing a `.toc` is an addon" test. You would get `Interface/AddOns/Libraries/` listed as a
+  broken addon and no AzerothAdmin.
+- The Lua hardcodes `Interface\AddOns\AzerothAdmin\…` in four places (textures and the minimap
+  icon), and the companion `.toc` declares `## Dependencies: AzerothAdmin`. Rename the folder and
+  you get a loaded addon with missing art.
+
+Installed and verified against the real client: 79 → 80 top-level `AddOns` directories, the one new
+directory being `AzerothAdmin`; `AddOns/AzerothAdmin/AzerothAdmin.toc` present, all 43 files the
+`.toc` loads resolve, `Libraries/` nested inside the addon and **not** at top level.
+
+#### The one thing it does not install: `AzerothAdmin_Models`
+
+Upstream ships **two** addons. The release zip contains `AzerothAdmin/` plus
+`AzerothAdmin_Models/`, a 5.6 MB `LoadOnDemand` GameObject-model database that the GO tab's model
+preview pulls in on first use; it was split out of the main addon to cut its idle memory from
+7.5 MB to 1.9 MB. In the repo it lives at `_build/AzerothAdmin_Models/`, and `client/addons.txt`
+has no grammar for "install this subdirectory as a second addon", so a `root:` install lands it
+nested and inert.
+
+Nothing breaks. `EnsureModelsLoaded()` (`Commands/GO.lua:103`) calls `LoadAddOn`, gets reason 2,
+prints `ERROR: Could not load Models addon - Addon missing` and leaves the rest of the GO tab
+working; every other tab is unaffected. If you want the model preview, lift it once by hand:
+
+```bash
+cd "$HOME/games/wow-3.3.5a/ChromieCraft_3.3.5a/Interface/AddOns"
+cp -a AzerothAdmin/_build/AzerothAdmin_Models .
+```
+
+`scripts/client-addons.sh` only deletes folders it manages, so the copy survives re-runs — but it
+also will not be refreshed by them, so redo it whenever the pinned SHA moves. The clean fix is a
+third manifest mode (`sub:<path>:<NAME>`) in the installer; until that exists, this is the honest
+state of things.
+
+#### It does not replace an item browser
+
+There is a `Frames_Section*.lua` for Main, Char, GO, NPC, Server, Tele, Ticket and Misc — and none
+for items. What item support exists is a name box wired to `.lookup item` /
+`.lookup item set` (`Core/AzerothAdmin.lua:2263`) whose chat output is scraped into a plain text
+list, plus `.additem`. No icons, no tooltips, no filtering by slot, quality or item level, and no
+way to see what an item actually is before you spawn it. That gap is why the in-house item browser
+is separate work rather than something AzerothAdmin already covers; the two sit side by side, and
+installing this one changes nothing about that plan.
+
 ---
 
 ## 6. Practical notes

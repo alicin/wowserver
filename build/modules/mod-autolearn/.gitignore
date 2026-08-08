@@ -1,0 +1,16 @@
+# Same trap as build/modules/mod-dk-lowlevel/.gitignore, for the same reason: the repo-root
+# .gitignore line 12 is a bare `data/`, which -- having no leading slash -- matches a directory
+# named `data` at ANY depth. It is there for the extracted client data at the repo root, but it
+# also swallows this module's data/sql/db-world/**.sql, which is the ENTIRE module.
+#
+# The failure is delayed and quiet. `docker build` sends the whole working tree as context, so a
+# LOCAL build picks the SQL up and everything works -- while CI, which builds from a clean
+# `git clone`, produces an image with no migration in it and a worldserver that boots fine and
+# grants nothing. `git status` never mentions the missing file.
+#
+# A nested .gitignore's patterns take precedence over the parent's for paths beneath it, so
+# re-including the directory is enough. Re-including only *.sql would NOT be: git never descends
+# into an excluded directory.
+#
+# The tidier fix is to anchor the root pattern as `/data/`. Do that instead and delete this file.
+!/data/

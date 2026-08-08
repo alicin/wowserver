@@ -265,36 +265,161 @@ def curve(level, low_avg=9.5, high_avg=132.0, top_level=55):
 
 # --------------------------------------------------------- character creation (A7 - A10) --
 
-DK_RACE = 1                     # Human
 DK_CLASS = 6                    # CLASS_DEATH_KNIGHT
-TEMPLATE_CLASS = 1              # Warrior -- the class whose level 1-54 data we copy
+TEMPLATE_CLASS = 1              # Warrior -- the class whose level 1-54 STATS A1 copies. This is a
+                                # class-wide copy with no race in it (player_class_stats is keyed
+                                # (Class, Level)); the per-race template that gear and the spawn
+                                # point come from is DkRace.template_class, below.
 
 # A7. Moving the spawn off map 609 does three jobs at once: it makes the entire DK starter
 # chain unreachable (every questgiver 12593..12801 spawns only on 609, there are zero
 # areatrigger_teleport rows targeting 609, and every chain quest is MinLevel 55), it makes
 # CalculateTalentsPoints take the normal branch, and it sets the homebind
-# (PlayerStorage.cpp:7187). Map/zone are fixed here; x/y/z/o are copied VERBATIM from the
-# race 1 class 1 row in the live database, never typed in.
-CREATE_MAP = 0
-CREATE_ZONE = 12                # Elwynn Forest / Northshire
+# (PlayerStorage.cpp:7187). Nothing about the destination is typed in: map, zone AND x/y/z/o are
+# all copied VERBATIM from the race's own template row in the live database. The only thing
+# asserted about the result is that it is not Acherus.
+FORBIDDEN_CREATE_MAP = 609      # Ebon Hold. An emitted row on this map means the feature is off.
+
+OUTFIT_KEY_COLUMNS = ("RaceID", "ClassID", "SexID", "OutfitID")
+
+# ------------------------------------------------------------------- the DK race table (A7) --
+
+
+@dataclass(frozen=True)
+class DkRace:
+    """One playable race, and the class whose level-1 starting data its DK copies.
+
+    `template_class` drives BOTH the spawn point (A7) and the starting kit (A8). Everything
+    else about the race -- map, zone, coordinates, orientation, the two CharStartOutfit row ids
+    -- is looked up from the live DB and the stock DBC at generate time. Only the choice of
+    template, the racial button and the reason live here.
+    """
+
+    race_id: int
+    name: str
+    template_class: int
+    template_class_name: str
+    # A9. The racial ability's action-bar slot, copied from the stock Blizzard bar for this
+    # race's Death Knight (.work/ac-src/data/sql/base/db_world/playercreateinfo_action.sql,
+    # lines 58-316). The slot is NOT uniform: race 1 puts its racial on button 11 and race 10
+    # on button 6, everyone else on button 10. Reproducing the stock slot keeps the bar looking
+    # like the one Blizzard shipped instead of like something this feature invented.
+    racial_button: int
+    racial_spell: int
+    racial_name: str
+    why: str = ""               # only set where template_class is not Warrior
+
+
+# WHY WARRIOR IS THE DEFAULT AND WHERE IT IS NOT
+# ----------------------------------------------
+# Warrior is the class a Death Knight is closest to at level 1: plate, melee, no resource that a
+# DK does not have. Eight of the ten races take it unchanged. The two exceptions were both found
+# by query, not by reading lore:
+#
+#   race 10 Blood Elf -- CANNOT be a warrior on 3.3.5a. `SELECT class FROM playercreateinfo
+#     WHERE race = 10` returns 2,3,4,5,6,8,9: no 1. (Blood elf warriors are a Cataclysm
+#     addition.) Paladin is the fallback: it is the only other plate-wearing melee class in the
+#     game, race 10 has it, and its kit's weapon is 23346 Battleworn Claymore -- a two-handed
+#     sword, which a Death Knight is proficient with.
+#
+#   race 6 Tauren -- CAN be a warrior, and the warrior row is still the wrong template. The
+#     Tauren warrior kit (CharStartOutfit 27/63) carries exactly one weapon, 2361 Battleworn
+#     Hammer, item SubClass 5 = two-handed mace, which maps to SKILL_2H_MACES (160) at
+#     ItemTemplate.h:786. A Death Knight created on this realm never learns skill 160:
+#     `SELECT racemask, classmask FROM playercreateinfo_skills WHERE skill = 160` is
+#     (1061, 3) -- classmask 3 is warrior|paladin, not 32. PlayerStorage.cpp:2363 then returns
+#     EQUIP_ERR_NO_REQUIRED_PROFICIENCY, StoreNewItemInBestSlots (Player.cpp:776-787) falls
+#     through to the backpack, and the Tauren Death Knight spawns holding nothing. Confirmed
+#     against live data: of the 15 class-6 characters on this realm, 15 have skills 43/44/55/172
+#     and only 3 have 160, and those three trained it later.
+#     Tauren shaman (Worn Mace, SKILL_MACES 54) and druid (Bent Staff, SKILL_STAVES 136) fail
+#     the same test. Hunter is the first Tauren kit that passes: it carries 12282 Worn Battleaxe
+#     (SubClass 1 -> SKILL_2H_AXES 172), the same starter two-hander every other Horde melee
+#     race gets. Its Old Blunderbuss goes to the backpack, which is cosmetic; no weapon at all
+#     is not.
+#
+# Invariant #16 re-derives both choices from the live database on every run, so if this realm's
+# data ever changes underneath them the build fails instead of shipping a weaponless character.
+DK_RACES = (
+    DkRace(1,  "Human",     1, "Warrior", 11, 59752, "Every Man for Himself"),
+    DkRace(2,  "Orc",       1, "Warrior", 10, 20572, "Blood Fury"),
+    DkRace(3,  "Dwarf",     1, "Warrior", 10,  2481, "Find Treasure"),
+    DkRace(4,  "Night Elf", 1, "Warrior", 10, 58984, "Shadowmeld"),
+    DkRace(5,  "Undead",    1, "Warrior", 10, 20577, "Cannibalize"),
+    DkRace(6,  "Tauren",    3, "Hunter",  10, 20549, "War Stomp",
+           why="the Tauren warrior kit's only weapon is a two-handed mace and a Death Knight "
+               "never learns SKILL_2H_MACES (160) on this realm"),
+    DkRace(7,  "Gnome",     1, "Warrior", 10, 20589, "Escape Artist"),
+    DkRace(8,  "Troll",     1, "Warrior", 10, 26297, "Berserking"),
+    DkRace(10, "Blood Elf", 2, "Paladin",  6, 50613, "Arcane Torrent",
+           why="blood elves cannot be warriors on 3.3.5a; paladin is the other plate melee class"),
+    DkRace(11, "Draenei",   1, "Warrior", 10, 59545, "Gift of the Naaru"),
+)
+
+# The order invariant #16 walks when it re-derives template_class: melee-plate first, then the
+# remaining melee classes, hunter last because its kit's headline weapon is a ranged one and it
+# is only ever picked for the two-handed axe that rides along with it. Classes with no melee
+# weapon in their level-1 kit at all (priest, mage, warlock) are deliberately absent -- picking
+# one would mean a Death Knight who starts with a staff they cannot hold.
+TEMPLATE_CLASS_PREFERENCE = (1, 2, 4, 7, 11, 3)
+
+# ItemTemplate::GetSkill (ItemTemplate.h:782-815), transcribed. Index is the item SubClass; the
+# value is the SkillLine id PlayerStorage.cpp:2363 demands a non-zero value in before it will let
+# the item be equipped. 0 means "no proficiency needed".
+ITEM_CLASS_WEAPON = 2
+ITEM_CLASS_ARMOR = 4
+WEAPON_SUBCLASS_SKILL = (44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, 473, 0, 173, 176,
+                         253, 226, 228, 356)
+ARMOR_SUBCLASS_SKILL = (0, 415, 414, 413, 293, 0, 433, 0, 0, 0, 0)
+
+# InventoryType values that put a weapon in a hand rather than in the ranged slot
+# (ItemTemplate.h:269-283). A kit "has a usable weapon" only if one of these is equippable.
+MELEE_INVENTORY_TYPES = (13, 17, 21, 22, 23)    # WEAPON, 2HWEAPON, MAINHAND, OFFHAND, HOLDABLE
+
+
+def item_required_skill(item_class, item_subclass):
+    """The SkillLine id an item demands, or 0. ItemTemplate.h:797-812."""
+    if item_class == ITEM_CLASS_WEAPON:
+        return (WEAPON_SUBCLASS_SKILL[item_subclass]
+                if item_subclass < len(WEAPON_SUBCLASS_SKILL) else 0)
+    if item_class == ITEM_CLASS_ARMOR:
+        return (ARMOR_SUBCLASS_SKILL[item_subclass]
+                if item_subclass < len(ARMOR_SUBCLASS_SKILL) else 0)
+    return 0
+
+
+def race_by_id(race_id) -> Optional[DkRace]:
+    for r in DK_RACES:
+        if r.race_id == race_id:
+            return r
+    return None
+
 
 # A8. CharStartOutfit override, not playercreateinfo_item. The single existing DK row
 # (0, 6, 40582, -1) is a REMOVAL directive -- negative counts route into
 # PlayerCreateInfoAddItemHelper (ObjectMgr.cpp:4482) which zeroes that itemId inside the
-# CharStartOutfit entry. Eighteen negative rows plus a positive kit would log an error per
-# miss. Rows 352/353 are Human DK male/female; rows 1/14 are Human warrior male/female. Only
-# the ItemID/DisplayItemID/InventoryType arrays are copied -- RaceID/ClassID/SexID/OutfitID
-# stay as they are in 352/353, because they are already correct.
-START_OUTFITS = ((352, 1), (353, 14))   # (death knight outfit id, warrior template outfit id)
-OUTFIT_KEY_COLUMNS = ("RaceID", "ClassID", "SexID", "OutfitID")
+# CharStartOutfit entry. Eighteen negative rows plus a positive kit would log an error per miss.
+# Which rows to touch is NOT listed here: dkspells.py resolves both the Death Knight row and the
+# template row out of CharStartOutfit.dbc by (RaceID, ClassID, SexID), the same key
+# GetCharStartOutfitEntry uses at DBCStores.cpp:880 (race | class << 8 | gender << 16). Only the
+# ItemID/DisplayItemID/InventoryType arrays are copied -- RaceID/ClassID/SexID/OutfitID stay as
+# the DK row already has them, because they are already correct.
+OUTFIT_SEXES = (0, 1)           # male, female -- both are required for every race
 
-# A9. Action bar. 6603 = Attack, 59752 = Every Man for Himself (Human racial). Button 1 is the
-# custom rank-1 spell; resolved from the spec, never hardcoded.
-ACTION_BAR = (
-    (0, 6603, 0),
-    (1, ICY_TOUCH.ranks[0].spell_id, 0),
-    (11, 59752, 0),
-)
+# A9. Action bar. 6603 = Attack. Button 1 is the custom rank-1 spell; resolved from the spec,
+# never hardcoded. Button `racial_button` is the race's own racial, from the table above.
+ACTION_BUTTON_ATTACK = 0
+ACTION_BUTTON_RANK1 = 1
+ATTACK_SPELL = 6603
+
+
+def action_bar_for(race: DkRace):
+    """[(button, action, type)] for a brand-new Death Knight of `race`."""
+    return (
+        (ACTION_BUTTON_ATTACK, ATTACK_SPELL, 0),
+        (ACTION_BUTTON_RANK1, ABILITIES[0].ranks[0].spell_id, 0),
+        (race.racial_button, race.racial_spell, 0),
+    )
 
 # A10. 48266 Blood Presence is a level-55 spell cast on first login with triggered=true
 # (CharacterHandler.cpp:1007), so it would apply anyway and leave a level-1 DK with an aura
