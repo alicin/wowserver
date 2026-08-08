@@ -1,0 +1,68 @@
+# deploy/mysql.cnf
+#
+# Mounted read-only at /etc/mysql/conf.d/wow.cnf by docker-compose.yml.
+# The image's /etc/my.cnf ends with `!includedir /etc/mysql/conf.d/`, so anything
+# in that directory is read after the stock defaults and wins.
+#
+# THIS FILE MUST EXIST BEFORE THE FIRST `docker compose up`.
+# Docker creates a *directory* at a bind-mount source that does not exist, and
+# `!includedir` SILENTLY SKIPS a directory: the server comes up clean, logs no
+# warning, and runs on stock defaults (buffer pool 128M, REPEATABLE-READ,
+# performance_schema ON). It is a repo file, not a generated one — it is committed,
+# so this only bites on a checkout that never happened.  hosting.md 6.2
+#
+# Sizing rationale, in one line: the mod-playerbots wiki's "innodb_buffer_pool_size
+# = 50% of RAM" assumes MySQL owns the machine. Here it shares 8 GB with a
+# worldserver that wants 3.5-5.5 GB, and worldserver reads acore_world almost
+# entirely at STARTUP and caches it in its own process memory — steady-state DB
+# traffic is acore_characters / acore_playerbots *writes*. The pool needs the hot
+# character/bot working set, not the 4 GB world DB. The cost of a small pool is a
+# slower boot, paid once per restart.  hosting.md 6.1
+#
+# Budget: ~1 GB pool + ~0.4 GB engine/connection overhead = ~1.4 GB resident.
+#
+# Every key below was validated against the pinned image with
+#     docker run --rm -v ./mysql.cnf:/etc/mysql/conf.d/wow.cnf:ro \
+#       mysql:8.4.11 mysqld --validate-config
+# on 2026-08-08 (mysqld 8.4.11). An unknown key there is a hard startup failure,
+# not a silent ignore — unlike AzerothCore's conf files.
+
+[mysqld]
+
+# --- the number that matters ---
+innodb_buffer_pool_size        = 1G      # NOT 4G. ~12% of RAM. worldserver needs the rest.
+innodb_buffer_pool_instances   = 1       # forced to 1 below 1G anyway; no benefit at this size
+
+# --- write path: this is a game server, not a bank ---
+skip-log-bin                             # no replication here; cuts disk writes hard
+# innodb_flush_log_at_trx_commit = 2 risk, stated plainly: a HOST crash or power
+# loss costs up to ~1s of committed transactions. A mysqld PROCESS crash costs
+# nothing. For three friends and some bots that is a second of loot, and the fsync
+# reduction is large. Set it to 1 if that trade bothers you; expect more disk I/O.
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method            = O_DIRECT
+innodb_log_buffer_size         = 16M
+innodb_io_capacity             = 500     # playerbots wiki values; fine for NVMe
+innodb_io_capacity_max         = 2500
+innodb_use_fdatasync           = ON      # MySQL >= 8.0.26; present in 8.4.11
+
+# --- AC-specific ---
+transaction_isolation          = READ-COMMITTED   # playerbots wiki
+# AzerothCore opens a synch + worker connection pool PER DATABASE, and playerbots
+# adds a fourth (acore_playerbots). Total is a few dozen. Do not cut this to 40
+# "to save memory" without first adding up
+#   {World,Character,Login,Playerbots}Database.{Worker,Synch}Threads.
+max_connections                = 100
+
+# --- claw back RAM from mysqld's own overhead ---
+performance_schema             = OFF     # frees roughly 300-400 MB
+table_open_cache               = 2000
+tmp_table_size                 = 32M
+max_heap_table_size            = 32M
+
+# Confirm it actually took, rather than assuming — a directory at the mount source
+# produces a healthy server on stock defaults:
+#   cd /srv/wow/wowserver/deploy
+#   docker compose exec -T mysql mysql --defaults-extra-file=/etc/mysql/backup.cnf \
+#     -e "SELECT @@innodb_buffer_pool_size, @@transaction_isolation, @@performance_schema;"
+#   want: 1073741824   READ-COMMITTED   0

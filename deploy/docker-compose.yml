@@ -1,0 +1,282 @@
+# deploy/docker-compose.yml
+#
+# Three services. worldserver owns ALL FOUR database migrations (docs/bring-up.md 2.4),
+# so authserver waits for it and runs with updates disabled.
+#
+# Values referenced as ${...} come from deploy/.env (gitignored; see .env.example).
+# Compose reads .env from the *project directory*, which is the directory holding this
+# file — so every command below runs from /srv/wow/wowserver/deploy.
+#
+# This file lives inside the repo checkout on purpose: it bind-mounts ../conf/..., so
+# the compose file and the conf files it serves have to sit in the same working tree.
+# Clone the repo anywhere but /srv/wow/wowserver and every relative mount points at
+# nothing.  docs/hosting.md 7.
+
+name: wowserver
+
+services:
+
+  mysql:
+    # docs/bring-up.md 5 says `mysql:8.4`. That tag moves with every patch release, so
+    # it is pinned here to the exact image the 8.4 tag resolved to on 2026-08-08
+    # (mysqld 8.4.11) — same image, reproducible. The digest is the multi-arch index
+    # digest, so it is not architecture-locked. Bump both halves together.
+    #
+    # 8.4's default authentication plugin is caching_sha2_password, and
+    # mysql_native_password is no longer built in. bring-up.md 5 flags this (verify)
+    # and offers a fallback to mysql:8.0. RESOLVED, 2026-08-08 — no fallback needed:
+    # libmariadb3 1:10.11.18-0+deb12u1, the exact bookworm package hosting.md 3.4's
+    # runtime stage installs, authenticated as 'acore' over unencrypted TCP against
+    # this image and read information_schema. If you ever DO hit an
+    # authentication-plugin error here, mysql:8.0 is still the escape hatch.
+    image: mysql:8.4.11@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+
+    # `unless-stopped`, and NOT the `on-failure` the two game services use. The policy
+    # has to match the process's exit-code protocol, and mysqld does not have one:
+    # any exit is an exit you want undone. AzerothCore does have one (see worldserver),
+    # which is the whole reason the two differ.  bring-up.md 5
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in deploy/.env}
+
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+      # Runs ONCE, on first initialisation of an empty data directory. The committed
+      # 01-databases.sql.template is inert here (the entrypoint only executes *.sql,
+      # *.sh and the compressed *.sql.* forms); the generated 01-databases.sql beside
+      # it is what runs.  bring-up.md 2.2, 6 step 1
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+
+      # Tuning for an 8 GB box SHARED with worldserver.  hosting.md 6.2
+      # MUST already exist: Docker creates a DIRECTORY at a missing bind-mount source,
+      # and my.cnf's `!includedir` silently skips a directory — you get a healthy
+      # server on stock defaults and no warning anywhere. It is a committed repo file.
+      - ./mysql.cnf:/etc/mysql/conf.d/wow.cnf:ro
+
+      # Root credentials as a 0600 option file, so they never appear on a command line
+      # — container processes are visible in `ps` on the host and in /proc inside it,
+      # and MySQL's own docs call the -p form insecure. Generated from deploy/.env by
+      # scripts/backup.sh, gitignored, read by backup/restore (hosting.md 7.3, 7.4) and
+      # by the "did the world finish booting" query in bring-up.md 6.2.
+      # It must EXIST before the first `up`, same directory trap as mysql.cnf above:
+      #   ( umask 077; set -a; . ./.env; set +a
+      #     printf '[client]\nuser=root\npassword="%s"\n' "$MYSQL_ROOT_PASSWORD" \
+      #       > mysql-backup.cnf )
+      # backup.sh rewrites it in place with `>`; never `mv` a temp file over it — a
+      # bind-mounted *file* follows the inode, so a rename leaves the running container
+      # reading the old one.
+      - ./mysql-backup.cnf:/etc/mysql/backup.cnf:ro
+
+    healthcheck:
+      # NO CREDENTIALS, on purpose. `mysqladmin ping` is answered before authentication
+      # — MySQL documents the exit status as "0 even in case of an error such as Access
+      # denied, because this means that the server is running but refused the
+      # connection". -h 127.0.0.1 forces TCP, so this only passes once the socket the
+      # game servers use is actually accepting connections; the temporary server the
+      # entrypoint runs during initdb is --skip-networking and correctly reads as
+      # unhealthy. So by the time this is green, 01-databases.sql has already run.
+      # Confirmed on this image, 2026-08-08: the entrypoint's temporary server logs
+      # `ready for connections ... port: 0`, feeds the init directory over its private
+      # socket, stops, and only then does the real server bind 3306. The first
+      # successful TCP ping came after "Temporary server stopped", with all four
+      # acore_* schemas already present.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+
+    # If the kernel has to kill something, worldserver losing a few minutes is
+    # recoverable; mysqld dying mid-write is the scenario backups exist for.
+    # hosting.md 7.5
+    oom_score_adj: -500
+
+    networks: [wow]
+
+  worldserver:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER in deploy/.env}/wowserver:${IMAGE_TAG:?pin a SHA, not latest}
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+    # ---- THE RESTART POLICY. Read this before changing it. ----
+    # AzerothCore exit codes (World.h, ShutdownExitCode):
+    #     0 SHUTDOWN_EXIT_CODE  -> .server shutdown / .server exit / SIGTERM
+    #     1 ERROR_EXIT_CODE     -> crash, bad config, missing maps/dbc
+    #     2 RESTART_EXIT_CODE   -> .server restart / .server idlerestart
+    # `always` and `unless-stopped` restart on 0 too, so `.server shutdown 300` counts
+    # down, saves, exits, and Docker instantly brings it back. The server appears to
+    # ignore shutdown commands. It is the policy, not a bug — it is a recurring
+    # confusion in AC's issue tracker.
+    # `on-failure` gives exactly the three behaviours you want: exit 0 stays down
+    # because you meant it, exit 2 comes back because .server restart meant that too,
+    # exit 1 comes back as crash recovery.
+    # Corollary for cron (hosting.md 7.6): the weekly reboot must use
+    # `.server restart` (exit 2), never `.server shutdown` (exit 0), or the server
+    # stays offline until somebody notices.
+    restart: on-failure
+
+    # Must exceed the longest `.server shutdown <delay>` you use, or `docker compose
+    # stop` SIGKILLs mid-save. The 300s countdown plus the final character-save flush
+    # is what the margin covers. SIGTERM itself is handled — it calls World::StopNow(0),
+    # a clean save-and-exit. The Docker default is 10 seconds.
+    stop_grace_period: 6m
+
+    # There is no worldserver-cli binary. AzerothCore ships exactly two binaries and
+    # neither is a client, so the ONLY interactive console is this process's stdin:
+    #     docker attach wowserver-worldserver-1        # prompt is literally "AC> "
+    # `tty` alone gives no writable stdin; `stdin_open` alone gives no console. Both,
+    # or no console. Detach with Ctrl-P Ctrl-Q — Ctrl-C sends SIGINT, which is handled
+    # as a clean shutdown you did not intend.
+    # The scriptable alternative is SOAP on 7878, published below.
+    stdin_open: true
+    tty: true
+
+    environment:
+      # WHICH DAEMON THIS IS. One image, two services. The image's ENTRYPOINT dispatches
+      # on this and execs
+      #     /opt/ac/bin/$ACORE_COMPONENT -c /opt/ac/etc/$ACORE_COMPONENT.conf
+      # There is deliberately NO `command:` on either game service: Compose's `command`
+      # replaces the image's CMD, the entrypoint builds its own argv, so at best yours
+      # is ignored and at worst it lands on the end of the exec. If a service ever
+      # starts the wrong daemon, this variable is the first thing to look at.
+      # bring-up.md 1.1 row 5, hosting.md 3.4
+      ACORE_COMPONENT: worldserver
+
+      # Skips DBUpdater's blocking `Do you want to create it? [yes (default) / no]`
+      # prompt (std::getenv("AC_DISABLE_INTERACTIVE") in DBUpdater.cpp, verified
+      # 2026-08-08). With a tty allocated and nobody attached, that std::getline blocks
+      # forever: the worldserver starts, logs `Database "..." does not exist`, and then
+      # does nothing at all — no crash, no restart, no progress. The AC> console still
+      # works; only the blocking prompts are skipped.
+      AC_DISABLE_INTERACTIVE: "1"
+
+      # --- config overrides, not conf-file edits ---
+      # Every AzerothCore key has an environment twin: ConfigMgr::GetEnvVarName() is
+      # "AC_" + the key upper-snake-cased on '.', '-', ' ' and case/digit boundaries,
+      # and GetValueDefault() checks the environment BEFORE the file. Verified against
+      # src/common/Configuration/Config.cpp @ Playerbot, 2026-08-08. It works for keys
+      # absent from the file too, which is why AC_PLAYERBOTS_DATABASE_INFO reaches a
+      # module key here.
+      # Connection strings live here, not in the committed conf files, because they
+      # carry the password.  Format: "host;port;user;password;database"
+      AC_LOGIN_DATABASE_INFO:      "mysql;3306;acore;${ACORE_DB_PASSWORD:?set ACORE_DB_PASSWORD in deploy/.env};acore_auth"
+      AC_CHARACTER_DATABASE_INFO:  "mysql;3306;acore;${ACORE_DB_PASSWORD};acore_characters"
+      AC_WORLD_DATABASE_INFO:      "mysql;3306;acore;${ACORE_DB_PASSWORD};acore_world"
+      # PlayerbotsDatabaseInfo lives in playerbots.conf, NOT worldserver.conf, and the
+      # module builds its own DatabaseLoader for it. bring-up.md 2, 2.1.
+      AC_PLAYERBOTS_DATABASE_INFO: "mysql;3306;acore;${ACORE_DB_PASSWORD};acore_playerbots"
+
+      AC_DATA_DIR: "/azerothcore/data"   # the 3 GB client-data mount. hosting.md 4
+      AC_LOGS_DIR: "/azerothcore/logs"
+      # Where the image copied data/sql/** and modules/*/data/sql/**. The compiled-in
+      # default is the BUILD-time CMake source path (/src), which does not exist in the
+      # runtime stage — the DB updater shells out to the mysql client and feeds it these
+      # files off disk, so getting this wrong aborts the first boot with
+      # `>> Directory "..." not exist`.  bring-up.md 1.1 row 3
+      AC_SOURCE_DIRECTORY: "/opt/ac/src"
+      # Updates.EnableDatabases is deliberately NOT set: worldserver.conf's shipped 7
+      # (login|character|world) is correct, and the playerbots pool is governed by a
+      # separate boolean, Playerbots.Updates.EnableDatabases, in playerbots.conf.
+      # There is no fourth bit — setting the mask to 15 accomplishes nothing.
+      # bring-up.md 2.1
+
+    volumes:
+      # .conf, NOT .conf.dist. The build installs only .dist files; the server reads the
+      # un-suffixed name, and a missing module conf is a SILENT failure — LoadModulesConfigs
+      # logs the miss, returns success, and every module key falls back to its compiled-in
+      # default. That is the difference between MaxRandomBots 30 and upstream's 500.
+      # bring-up.md 4.1, 4.3
+      - ../conf/worldserver.conf:/opt/ac/etc/worldserver.conf:ro
+      - ../conf/modules:/opt/ac/etc/modules:ro
+      # Editing the CONTENTS of a bind-mounted file is invisible to Compose: `up -d`
+      # prints up-to-date and the running process keeps the config it read at startup.
+      # A phase flip is therefore `.server shutdown 300` (exit 0, stays down under
+      # on-failure) and THEN `up -d`, which finds no container and starts a fresh one.
+      # bring-up.md 4.4
+      - /srv/wow/data:/azerothcore/data:ro
+      - wow-logs:/azerothcore/logs
+
+    ports:
+      # Tailnet address only, so a misconfigured cloud firewall cannot leak the game
+      # ports.  hosting.md 5.1
+      # GUARDED, unlike bring-up.md 5.1's table: an empty TAILSCALE_IP turns this into
+      # ":8085:8085", which Compose happily accepts as a publish on EVERY interface.
+      # That is a silent downgrade from "invisible to the internet" to "port-scannable",
+      # so it fails loudly here instead. See the deviation note in .env.example.
+      - "${TAILSCALE_IP:?set TAILSCALE_IP in deploy/.env to the output of: tailscale ip -4}:8085:8085"
+      # SOAP, loopback only. HTTP Basic over cleartext; never face it at the internet.
+      # Host loopback reaches the container through this publish, which is what lets
+      # scripts/soap-cmd.sh run from host cron with no `docker compose exec` — just as
+      # well, since the runtime image has no curl.  hosting.md 7.2, 7.6
+      - "127.0.0.1:7878:7878"
+
+    healthcheck:
+      # /proc/net/tcp needs no extra packages; 1F95 is 8085 in hex. `ss` and `nc` are
+      # NOT in debian:*-slim, and a healthcheck using them fails permanently and
+      # silently restart-loops the container.  hosting.md 7.5
+      test: ["CMD-SHELL", "grep -q ':1F95 ' /proc/net/tcp || exit 1"]
+      interval: 60s
+      timeout: 5s
+      # retries is deliberately high, not the usual 3. start_period alone is not a safe
+      # margin here: if first boot overruns it by even a minute, three consecutive 60s
+      # failures flip the container to unhealthy and `restart: on-failure` tears down an
+      # import that is still making progress -- and it restarts into the SAME overrun, so
+      # it loops. With 15 retries the window is start_period + 15 min of grace, and the
+      # only cost is that a genuinely dead server is reported dead 15 minutes later.
+      # Optimise for "never kill a working import", not for fast bad news.
+      retries: 15
+      # First boot = the whole world DB import (15-30 min on a CX33) PLUS
+      # RandomPlayerbotFactory building 13 accounts / 130 characters, and BOTH finish
+      # before the listener on 8085 ever opens. The repo's own numbers add to more than
+      # 40m at the pessimistic end, so 40m was cutting it fine on exactly the hardware
+      # this targets. This is the one place the number lives.  bring-up.md 5, 6.1, 8
+      start_period: 90m
+
+    oom_score_adj: 200
+    networks: [wow]
+
+  authserver:
+    image: ghcr.io/${GHCR_OWNER}/wowserver:${IMAGE_TAG}
+    depends_on:
+      worldserver:
+        # worldserver creates and migrates acore_auth; authserver cannot. With updates
+        # disabled it will not auto-create the schema either (the auto-create path
+        # requires updates enabled for that pool), so it has to start after worldserver
+        # has done the work. On first boot this waits out the whole import, which is
+        # correct — nobody can log in during it anyway.  bring-up.md 2.4
+        condition: service_healthy
+    restart: on-failure
+    stop_grace_period: 30s
+    environment:
+      ACORE_COMPONENT: authserver        # same image, other binary. No `command:`.
+      AC_DISABLE_INTERACTIVE: "1"
+      # authserver.conf ships Updates.EnableDatabases = 1, i.e. it would also try to
+      # migrate acore_auth. Two processes racing the same migration on first boot is
+      # avoidable; worldserver owns all four.  bring-up.md 2.4
+      AC_UPDATES_ENABLE_DATABASES: "0"
+      AC_LOGIN_DATABASE_INFO: "mysql;3306;acore;${ACORE_DB_PASSWORD};acore_auth"
+      AC_LOGS_DIR: "/azerothcore/logs"
+    volumes:
+      - ../conf/authserver.conf:/opt/ac/etc/authserver.conf:ro
+      - wow-logs:/azerothcore/logs
+    ports:
+      - "${TAILSCALE_IP}:3724:3724"
+    networks: [wow]
+
+# No db-import service. Upstream's compose runs a one-shot ac-db-import and sets
+# AC_UPDATES_ENABLE_DATABASES=0 on both servers. That is a good design and it does not
+# work on this fork: src/tools/dbimport registers Login, Character and World only, and
+# never invokes sScriptMgr->OnDatabasesLoading(). acore_playerbots is created, populated
+# and migrated ONLY by worldserver, via the module's PlayerbotsDatabaseScript. Run the
+# upstream topology and the fourth schema stays empty, then worldserver dies on its
+# first prepared statement against it.  bring-up.md 2.4
+
+volumes:
+  mysql-data:
+  wow-logs:
+
+networks:
+  wow:

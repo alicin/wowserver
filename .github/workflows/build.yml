@@ -1,0 +1,305 @@
+# .github/workflows/build.yml
+#
+# Builds build/Dockerfile (the pinned AzerothCore fork + the modules in build/modules.txt) and
+# pushes it to GHCR as  ghcr.io/<owner>/wowserver:<commit sha>.
+#
+# READ .github/workflows/README.md BEFORE THE FIRST RUN. The thing that will bite you is not in
+# this file: a brand-new GHCR package is PRIVATE even when the repo is public, so the very first
+# `docker compose pull` on the VPS fails with `denied` until the package is flipped.
+# docs/hosting.md §3.6 owns that explanation; the README links it.
+#
+# Everything here is sourced, not remembered:
+#   docs/hosting.md §3.3   runner specs, and the disk constraint this file spends a step on
+#   docs/hosting.md §3.4   glibc/ABI rules, and the ldd completeness check run below
+#   docs/hosting.md §3.5   the workflow sketch this file implements
+#   docs/hosting.md §3.6   GHCR visibility, and why the tag is a SHA
+#   docs/bring-up.md §1.1  what the image must actually contain — verified here, in CI, rather
+#                          than on the VPS 30 minutes into a database import
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    # A doc edit must not spend 40 minutes of runner time. Only the build inputs and this
+    # workflow itself produce an image; everything else in the repo is covered by lint.yml,
+    # which has no paths filter.
+    paths:
+      - 'build/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+# Deny everything at the top level; the single job below widens it to exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: build-${{ github.ref }}
+  # Deliberately false. Every run produces a distinct :<sha> tag that somebody may already be
+  # waiting to deploy, and killing a 40-minute build to start another 40-minute build saves
+  # nothing on a public repo, where runner minutes are unmetered.
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # GitHub's `bash` shell is `bash --noprofile --norc -eo pipefail {0}`. The scripts below set
+    # -euo pipefail again anyway, so the behaviour is stated in the file rather than inherited.
+    shell: bash
+
+jobs:
+  image:
+    # Pinned, not `ubuntu-latest`. Identical today (the -latest label points at 24.04) but the
+    # label moves, and the disk-cleanup step below deletes paths that are properties of *this*
+    # image. When GitHub announces the move, bump this line and re-check the delete list.
+    runs-on: ubuntu-24.04
+
+    # Hard cap is 6 h per job; over it GitHub kills the job with no useful message. 330 min
+    # fails loud, with a log, half an hour before that. A cold AzerothCore + playerbots build
+    # is tens of minutes on this runner tier; a cache hit is minutes. If a run ever gets near
+    # 330, the cache is not working — do not just raise this number.
+    timeout-minutes: 330
+
+    permissions:
+      contents: read
+      packages: write        # this, and only this, is what makes GITHUB_TOKEN able to push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here runs git after checkout, so do not leave a credential in .git/config.
+          persist-credentials: false
+
+      # ---------------------------------------------------------------------------------------
+      # DISK. This is the binding constraint on this build, not CPU, RAM or minutes.
+      #
+      # docs/hosting.md §3.3: a public repo gets 4 vCPU / 16 GB, a private one 2 vCPU / 8 GB —
+      # but BOTH rows say 14 GB SSD, and that volume is shared with the preinstalled toolchain
+      # image. Against it: the builder stage's apt layer, a shallow clone of the core fork plus
+      # every module, the C++ object tree for AzerothCore *with playerbots compiled in*, the
+      # installed prefix, the runtime image, and a mode=max buildx cache export of all of it.
+      #
+      # Nothing below touches the build. It deletes preinstalled toolchains this job never uses.
+      # ---------------------------------------------------------------------------------------
+      - name: Free runner disk
+        run: |
+          set -euo pipefail
+
+          echo "::group::disk and toolchain sizes before cleanup"
+          df -h /
+          # Depth 1, single filesystem: a couple of seconds, and it puts the real contents of
+          # this runner image in the log. Re-tune the delete list from this output, not from
+          # folklore, the first time a build gets tight.
+          sudo du -xhd1 /opt /usr/local /usr/share 2>/dev/null | sort -h | tail -25 || true
+          echo "::endgroup::"
+
+          # Only paths that were checked against a source are listed:
+          #   /usr/local/lib/android   actions/runner-images images/ubuntu/Ubuntu2404-Readme.md
+          #                            documents ANDROID_HOME=/usr/local/lib/android/sdk
+          #   the other four           the delete list of jlumbroso/free-disk-space, the action
+          #                            that exists for exactly this problem — reproduced inline
+          #                            so this pipeline takes on no third-party action for what
+          #                            is five `rm -rf` arguments.
+          # `rm -rf` on a path that is not there is a no-op, so a future runner-image change
+          # degrades this step to "freed less", never to a failed build.
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
+
+          # The runner image ships seeded docker images (node, buildpack-deps, ...) that this
+          # job never uses. Prune BEFORE setup-buildx-action, or the buildkit container it
+          # starts is a candidate for the prune.
+          docker image prune --all --force || true
+          sudo apt-get clean
+
+          echo "::group::disk after cleanup"
+          df -h /
+          echo "::endgroup::"
+
+          # Tripwire, not a measurement. ENOSPC forty minutes into a cold build is the failure
+          # this step exists to prevent; failing here costs thirty seconds and says why.
+          # Tune the two numbers from the `df` above once a real cold build has reported in.
+          avail_gb=$(df -BG --output=avail / | tail -1 | tr -d ' G')
+          echo "free on /: ${avail_gb} GB"
+          if [ "${avail_gb}" -lt 12 ]; then
+            echo "::error::only ${avail_gb} GB free on / after cleanup — a cold AzerothCore build cannot fit. See .github/workflows/README.md, 'Disk'."
+            exit 1
+          fi
+          if [ "${avail_gb}" -lt 25 ]; then
+            echo "::warning::${avail_gb} GB free on /. Tight for a cold build plus a mode=max cache export. If this run dies with ENOSPC, see .github/workflows/README.md, 'Disk'."
+          fi
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          # Both pinned. Left alone this action installs whatever buildx released most recently
+          # and starts `moby/buildkit:buildx-stable-1` — two moving refs in the middle of a
+          # pipeline that pins the base image, the core fork and every module by SHA.
+          # buildx-stable-1 resolves to BuildKit v0.31.2 today (tag and release both dated
+          # 2026-07-16); v0.35.0 is the buildx cut alongside that BuildKit line.
+          version: v0.35.0
+          driver-opts: image=moby/buildkit:v0.31.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # Automatically provided to every workflow run; there is no secret to create, and it
+          # does not exist outside a run — the VPS needs its own credential, or a public
+          # package. docs/hosting.md §3.6.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image name
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # A registry path must be lowercase. A GitHub account name need not be, and the
+          # resulting push failure ("invalid reference format") reads like a workflow bug.
+          echo "IMAGE=ghcr.io/${OWNER,,}/wowserver" >> "$GITHUB_ENV"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./build
+          file: ./build/Dockerfile
+          push: true
+
+          # ONE tag, the commit SHA, and no :latest. deploy/docker-compose.yml pins
+          #   image: ghcr.io/${GHCR_OWNER}/wowserver:${IMAGE_TAG:?pin a SHA, not latest}
+          # so a rollback is one line in deploy/.env (docs/bring-up.md §5.1). A :latest tag makes
+          # "which image is that box actually running" unanswerable, which is precisely the
+          # state you are in when you need to roll back. This drops the second tag from the
+          # sketch in docs/hosting.md §3.5 on purpose.
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+
+          # image.source is what links the GHCR package to this repository. The link is what
+          # makes the package inherit the repo's *access permissions* — never its visibility.
+          # docs/hosting.md §3.6, and README.md next to this file.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=wowserver
+
+          # The layer cache is the one that works out of the box (docs/hosting.md §3.5).
+          # mode=max also caches the intermediate builder stage, which is what makes a
+          # modules.txt-only change rebuild in minutes rather than an hour — without it, only
+          # the final runtime stage is cached and every module bump recompiles the core.
+          #
+          # Budget: the gha cache shares the repository's 10 GB Actions cache allowance and is
+          # LRU-evicted. If eviction starts thrashing (watch for cold builds on small diffs),
+          # the escape hatch is a registry cache, which has no such cap:
+          #   cache-from: type=registry,ref=ghcr.io/<owner>/wowserver:buildcache
+          #   cache-to:   type=registry,ref=ghcr.io/<owner>/wowserver:buildcache,mode=max
+          # That publishes a second, non-SHA tag on the package, so it is not the default here.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+          # A plain single-platform manifest. With attestations on (the buildx default) the push
+          # becomes an OCI index carrying an extra provenance manifest, which GHCR renders as an
+          # "unknown/unknown" platform beside every tag and which nothing in this stack consumes.
+          provenance: false
+          sbom: false
+
+      # ---------------------------------------------------------------------------------------
+      # The image is on the registry. Everything below asks it the questions the VPS is about to
+      # ask, while there is still a red X available to answer with.
+      # ---------------------------------------------------------------------------------------
+      - name: Verify the pushed image
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          # By digest, pulled back out of the registry rather than read from the local daemon:
+          # this also proves the push landed and that the manifest is pullable, which is the
+          # exact operation `docker compose pull` performs on the VPS.
+          docker pull -q "$REF"
+
+          # 1. Every shared object the two binaries need is present in the RUNTIME stage.
+          #    Verbatim from docs/hosting.md §3.4, which asks for it "right after
+          #    build-push-action". The failure it catches is a missing libboost_regex.so.1.74.0
+          #    — CI green, and worldserver dead on the VPS before it logs a single line.
+          echo "::group::ldd — runtime stage completeness"
+          docker run --rm --entrypoint sh "$REF" -c '
+            ldd /opt/ac/bin/worldserver /opt/ac/bin/authserver | grep "not found" && exit 1
+            exit 0'
+          echo "no missing shared objects"
+          echo "::endgroup::"
+
+          # 2. docs/bring-up.md §1.1, requirements 1–4. That section prints "MISSING: ..." and
+          #    exits 0 because it is written for a human at a terminal; here the same checks
+          #    have to fail the job. Both SQL checks are load-bearing — a runtime stage that
+          #    copied data/ but not modules/ passes the db_world line, imports the three core
+          #    schemas happily, and then dies partway through the module migrations.
+          echo "::group::image contents — docs/bring-up.md §1.1"
+          docker run --rm --entrypoint sh "$REF" -c '
+            rc=0
+            command -v mysql >/dev/null 2>&1 ||
+              { echo "MISSING: mysql client on PATH (default-mysql-client) — DBUpdater shells out to it"; rc=1; }
+            ls /opt/ac/bin/worldserver /opt/ac/bin/authserver >/dev/null 2>&1 ||
+              { echo "MISSING: one or both binaries under /opt/ac/bin"; rc=1; }
+            ls -d /opt/ac/src/data/sql/base/db_world >/dev/null 2>&1 ||
+              { echo "MISSING: world SQL tree at /opt/ac/src/data/sql/base/db_world"; rc=1; }
+            ls -d /opt/ac/src/modules/*/ >/dev/null 2>&1 ||
+              { echo "MISSING: module SQL trees under /opt/ac/src/modules"; rc=1; }
+            n=$(ls /opt/ac/etc/modules/*.conf.dist 2>/dev/null | wc -l)
+            echo "module .conf.dist files under /opt/ac/etc/modules: $n"
+            [ "$n" -gt 0 ] ||
+              { echo "MISSING: no module .conf.dist installed — the module conf story in docs/bring-up.md 4.1 cannot work"; rc=1; }
+            exit $rc'
+          echo "::endgroup::"
+
+          # 3. docs/bring-up.md §1.1 requirement 5, which the two `--entrypoint sh` runs above
+          #    would hide. One image, two daemons, dispatched on $ACORE_COMPONENT; the compose
+          #    file deliberately sets no `command:`. An image with no ENTRYPOINT gives two
+          #    containers that start a shell, find no tty and exit 0 — `docker compose up -d`
+          #    reports success and there is no server.
+          entrypoint=$(docker inspect -f '{{json .Config.Entrypoint}}' "$REF")
+          cmd=$(docker inspect -f '{{json .Config.Cmd}}' "$REF")
+          echo "entrypoint=${entrypoint}  cmd=${cmd}"
+          if [ "$entrypoint" = "null" ]; then
+            echo "::error::image has no ENTRYPOINT (docs/bring-up.md §1.1 requirement 5)"
+            exit 1
+          fi
+          if [ "$cmd" != "null" ]; then
+            echo "::error::image sets a CMD (${cmd}); it must not — docs/bring-up.md §1.1 requirement 5"
+            exit 1
+          fi
+
+      - name: Summary
+        if: success()
+        env:
+          SHA: ${{ github.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          owner=${IMAGE#ghcr.io/}
+          owner=${owner%/wowserver}
+          {
+            echo "### Image pushed"
+            echo
+            echo '```'
+            echo "${IMAGE}:${SHA}"
+            echo "${DIGEST}"
+            echo '```'
+            echo
+            echo "Deploy it by editing two lines of \`deploy/.env\` on the VPS, then"
+            echo "\`docker compose pull && docker compose up -d\`:"
+            echo
+            echo '```sh'
+            echo "GHCR_OWNER=${owner}"
+            echo "IMAGE_TAG=${SHA}"
+            echo '```'
+            echo
+            echo "Rolling back is the same edit with an older SHA. No \`:latest\` tag exists."
+            echo
+            echo "**First push only:** the GHCR package is **private** until you change it, even"
+            echo "though this repository is public — a package inherits the linked repo's access"
+            echo "permissions but *not* its visibility. The VPS pull fails with \`denied\` until"
+            echo "then. See \`.github/workflows/README.md\` and \`docs/hosting.md\` §3.6."
+          } >> "$GITHUB_STEP_SUMMARY"

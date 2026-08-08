@@ -1,0 +1,63 @@
+# repo                                            ref         commit
+# ------------------------------------------------ ----------- ----------------------------------------
+# CANONICAL. docs/modules.md 6.1 owns the contents of this file; this file is what the
+# build actually reads. If a module is documented on that page but missing here, it is
+# NOT in the image. Add a module in exactly one place -- here -- and rebuild.
+#
+# The core fork is NOT in this file; it lives in build/Dockerfile as ARG CORE_REPO /
+# ARG CORE_SHA, because changing it is a different class of event from bumping a module.
+#
+# THREE whitespace-separated fields per line, plus `#` comments and blank lines:
+#
+#   owner/name   ref   commit
+#
+# `ref` is the branch or tag the commit was resolved from. It is documentation for the
+# bump script in docs/modules.md 6.2 -- it is NOT what gets checked out. `commit` is what
+# gets checked out, always, so a moving branch can never end up in an image.
+#
+# The Dockerfile reads this with:
+#   while read -r repo ref sha; do ... done < /tmp/modules.txt
+# so: keep three fields on every non-comment line, and keep the trailing newline on the
+# last line (a file whose last line has no newline silently loses that module).
+#
+# All 18 commits below were re-resolved against the GitHub API on 2026-08-08 and every one
+# still exists AND is still the head of its stated ref -- nothing moved since the docs
+# resolved them. Bump one pin per commit, with the compare URL in the message
+# (docs/modules.md 6.2).
+
+# --- Tier 1: the server does not meet its brief without these -------------------------------
+mod-playerbots/mod-playerbots               master      a7b885d27134466dbc1c91d39b8241ea725a1bbb
+azerothcore/mod-autobalance                 stable      5d2778e301ae7684051cdc446efbe81c7ff2a79b
+azerothcore/mod-solo-lfg                    master      3821fe1d108ade8d2b7ad6611e41154e05864c65
+azerothcore/mod-rdf-expansion               master      c7a91c5973cda4529495b52b89375913f98726d6
+NathanHandley/mod-ah-bot-plus               master      f685832994c825f90aa5a3dc0e1620aa568e875b
+azerothcore/mod-npc-enchanter               master      af32add66eafc0e0eb8775999e76ceed75f18b74
+azerothcore/mod-npc-free-professions        master      01d8624f9c0789550c0b04b23c54928b054619ce
+noisiver/mod-assistant                      master      77505b1a3d561438a13fd3fabfe40676daa7fdfe
+azerothcore/mod-aoe-loot                    master      b5c663572d936985c19dc8b499ecea60e1da570d
+noisiver/mod-junk-to-gold                   master      2134690bb03899e5c9e44d0682e8e6abf0bbbaf2
+
+# --- Tier 2: selected. One per "two modules, one job" row in docs/modules.md 5.2. -----------
+Wishmaster117/mod-multibot-bridge           main        fa7d19054e64d710c0fec4ada7bef51082f2934d
+sogladev/mod-reset-raid-cooldowns           main        fd2391fb8755673270c982846a29bb3bf5648969
+azerothcore/mod-instance-reset              master      1e2c20770f40f5382348b7649291371f47c86812
+azerothcore/mod-transmog                    master      0d85cbc53d63ce2df8527169ce6ae47f5f6f6ba8
+azerothcore/mod-learn-spells                master      016b92d520f343d074ffd5d46016a94f4a3a6ebd
+azerothcore/mod-individual-xp               master      503471f766bc4f21dca0aa05e6a9d3d40718a780
+DustinHendrickson/mod-player-bot-level-brackets  main   a1780785f386732527de7455aac960f630d29b5d
+pangolp/mod-quest-loot-party                master      6f073c1bef1bba1aa73787d1e30db7429f2b1c7b
+
+# 18 modules -- 10 Tier 1, 8 Tier 2.
+#
+# Two things about this set that are easy to get wrong later:
+#
+#   mod-autobalance is pinned to the `stable` TAG-BRANCH, 5d2778e3 from 2024-09-10 --
+#   roughly 23 months behind the core commit. `master` is flagged beta, which is exactly
+#   why the maintainer ships `stable`. It is also the one pin with nothing older to walk
+#   back to: if it stops compiling on a core bump, move FORWARD to master and accept the
+#   beta flag, or carry a patch. It fails in CI in five minutes, not on the VPS at 2am.
+#
+#   mod-multibot-bridge has a client-side twin. It and the MultiBot-Chatless addon
+#   negotiate a protocol version at connect, so bumping this line without reshipping the
+#   addon breaks bot control for everyone, at login, not at build. Bump the pair in one
+#   commit. docs/client.md carries the client half.

@@ -1,0 +1,221 @@
+# .github/workflows/lint.yml
+#
+# The cheap one. Thirty seconds, no paths filter, runs on everything — because the alternative
+# is finding a typo in scripts/phase.sh or deploy/docker-compose.yml an hour into a build, or
+# worse, on the VPS at 2am with three friends waiting.
+#
+# Deliberately a separate workflow rather than a job inside build.yml: GitHub's `paths:` filter
+# is per-workflow, not per-job, and build.yml is filtered down to `build/**` so that doc edits
+# do not trigger a 40-minute image build. A lint job living in that file would inherit the same
+# filter and would therefore never see a change to scripts/ or deploy/ — which is the exact
+# thing it is here to check.
+#
+# Nothing here needs a secret, a registry or a network round trip.
+
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: lint-${{ github.ref }}
+  # The opposite call to build.yml: a superseded 30-second lint is worth nothing.
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ---------------------------------------------------------------------------------------
+      # scripts/ — bootstrap.sh, phase.sh, backup.sh, restore.sh, soap-cmd.sh, health.sh.
+      # These run as root on the VPS, some of them from cron with nobody watching. `bash -n` is
+      # the floor; shellcheck is what catches the unquoted expansion in a `rm -rf "$dir"/…`.
+      # ---------------------------------------------------------------------------------------
+      - name: Shell — bash -n and shellcheck
+        run: |
+          set -euo pipefail
+
+          # Every shell script in the repo: *.sh anywhere, plus any executable file whose
+          # shebang names a shell, so a helper that loses its suffix is not silently skipped.
+          mapfile -t files < <(
+            {
+              find . -path ./.git -prune -o -type f -name '*.sh' -print
+              find . -path ./.git -prune -o -type f -perm -u+x -print |
+                while IFS= read -r f; do
+                  case "$(head -c 256 -- "$f" 2>/dev/null | head -n 1)" in
+                    '#!'*sh|'#!'*sh\ *) printf '%s\n' "$f" ;;
+                  esac
+                done
+            } | sort -u
+          )
+
+          # Finding nothing is a finding. scripts/ is in the committed repo layout (README.md),
+          # and a lint that quietly passes over an empty set is the same silent-skip failure
+          # mode as a config key that does not exist.
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no shell scripts found. README.md's layout expects scripts/{bootstrap,phase,backup,restore,soap-cmd,health}.sh."
+            exit 1
+          fi
+
+          printf 'checking %d file(s):\n' "${#files[@]}"
+          printf '  %s\n' "${files[@]}"
+
+          # A parse error is a parse error in any shell, including the POSIX-sh ones.
+          for f in "${files[@]}"; do
+            bash -n "$f"
+          done
+
+          # The ubuntu-24.04 runner image ships ShellCheck 0.9.0, so nothing is downloaded here.
+          # (Note the capital S. A comment line starting with a lowercase "# shellcheck " is
+          # parsed as a ShellCheck *directive*, and an unparseable one is SC1073 — an error that
+          # stops the rest of the file being checked at all. Same trap in scripts/.)
+          #
+          # TWO PASSES, on purpose.
+          #
+          # Pass 1 is the broad gate, at `warning` — the line ShellCheck itself draws between
+          # "this is probably a bug" and "this is a remark". Wide, near-zero false positives.
+          #
+          # Pass 2 promotes exactly one *info*-level check to fatal. SC2086, the unquoted
+          # expansion — `rm -rf $dir/logs/*` — is classed info, and it is the highest-value
+          # finding there is for scripts that run as root on the VPS out of cron, where the
+          # blast radius of one empty variable is the disk. `--include` considers only the
+          # codes listed, so nothing else rides along.
+          #
+          # The rejected alternative was one blanket `--severity=info` gate. It goes red on
+          # correct code: SC2015 on phase.sh's `[[ $PHASE == 1 ]] && echo 0 || …` (safe — echo
+          # does not fail) and SC2016 on health.sh printing literal backticked command names.
+          # That turns the exclusion list into a per-file negotiation, which ends with somebody
+          # disabling a code to make a red run green. Two precise passes beat one loose one.
+          #
+          # SC1091 is the only exclusion: the scripts `source` deploy/.env, which is gitignored
+          # and so genuinely absent in a checkout. By design, not a defect.
+          shellcheck --severity=warning --exclude=SC1091 "${files[@]}"
+          shellcheck --include=SC2086 "${files[@]}"
+
+          # Everything below the gate — the rest of info, and style — as advice, never fatal.
+          echo "::group::shellcheck, info and style (advisory)"
+          shellcheck --severity=style --exclude=SC1091 "${files[@]}" || true
+          echo "::endgroup::"
+
+      # ---------------------------------------------------------------------------------------
+      # deploy/ — the compose file. `config` is the only thing that actually resolves the
+      # merge/extends/variable machinery; a plain YAML parse would pass a file compose rejects.
+      # ---------------------------------------------------------------------------------------
+      - name: deploy/ — docker compose config
+        run: |
+          set -euo pipefail
+
+          compose=deploy/docker-compose.yml
+          if [ ! -f "$compose" ]; then
+            echo "::error::${compose} is missing — the entire deploy story rests on it (docs/bring-up.md §5)."
+            exit 1
+          fi
+
+          # Why two --env-file. deploy/.env holds the real values, is gitignored, and does not
+          # exist here, so every ${VAR} in the compose file would be unset. Two of the five keys
+          # are ${VAR:?…}-guarded (docs/bring-up.md §5.1), which makes an EMPTY value a hard
+          # error from compose rather than a warning — so the committed .env.example alone is
+          # not enough to lint with. Split of responsibility:
+          #   deploy/.env.example        the KEY LIST (values there are blank, on purpose)
+          #   .github/ci/compose-lint.env  syntactically valid junk for keys that cannot be blank
+          # Later --env-file wins (compose >= 2.24; this image ships 2.38).
+          args=(-f "$compose")
+          if [ -f deploy/.env.example ]; then
+            args+=(--env-file deploy/.env.example)
+          else
+            echo "::warning::deploy/.env.example not found; linting from the CI fixture alone, so a missing key cannot be detected."
+          fi
+          args+=(--env-file .github/ci/compose-lint.env)
+
+          err="${RUNNER_TEMP}/compose-config.err"
+          if ! docker compose "${args[@]}" config --quiet 2>"$err"; then
+            cat "$err" >&2
+            echo "::error::docker compose config rejected ${compose}"
+            exit 1
+          fi
+          cat "$err" >&2
+
+          # An unset variable is only a WARNING to compose, which then substitutes an empty
+          # string and carries on. docs/bring-up.md §5.1 documents a live instance: an empty
+          # TAILSCALE_IP turns "${TAILSCALE_IP}:8085:8085" into ":8085:8085", which compose
+          # accepts as "publish on every interface" — the game port open to the internet, with
+          # no error anywhere. So here the warning is the finding, and it is fatal.
+          if grep -qi 'variable is not set' "$err"; then
+            echo "::error::a variable used by ${compose} is in neither deploy/.env.example nor .github/ci/compose-lint.env. Add the key to .env.example (blank, it is the key list) and a junk value to the CI fixture."
+            exit 1
+          fi
+
+          # Hard rule for this repo: images are pinned, never floating. The compose file must
+          # carry a SHA in IMAGE_TAG and explicit versions for everything else.
+          echo "::group::resolved images"
+          docker compose "${args[@]}" config --images
+          echo "::endgroup::"
+          if docker compose "${args[@]}" config --images | grep -E ':latest$|^[^:]+$' ; then
+            echo "::error::an image above is unpinned (:latest, or no tag at all). Pin it — docs/hosting.md §3.6."
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------------------------------
+      # Everything else that is YAML, including these workflows. A workflow file that does not
+      # parse simply never runs, and GitHub reports that in a corner of the Actions tab rather
+      # than as a failure on the commit that broke it.
+      # ---------------------------------------------------------------------------------------
+      - name: YAML parses
+        run: |
+          set -euo pipefail
+
+          python3 -c 'import yaml' 2>/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq python3-yaml
+          }
+
+          # A helper file rather than `python3 -c`, so the annotation is the parse error and
+          # its line number rather than a nine-frame traceback flattened onto one line.
+          check="${RUNNER_TEMP}/yamlcheck.py"
+          cat > "$check" <<'PY'
+          import sys, yaml
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as fh:
+                  list(yaml.safe_load_all(fh))
+          except Exception as exc:
+              sys.stderr.write(" ".join(str(exc).split()))
+              raise SystemExit(1)
+          PY
+
+          mapfile -t yamls < <(
+            find . -path ./.git -prune -o -type f \( -name '*.yml' -o -name '*.yaml' \) -print |
+              sort
+          )
+          if [ "${#yamls[@]}" -eq 0 ]; then
+            echo "::error::no YAML files found, not even this workflow — the checkout is wrong."
+            exit 1
+          fi
+
+          rc=0
+          for y in "${yamls[@]}"; do
+            if msg=$(python3 "$check" "$y" 2>&1); then
+              echo "ok   $y"
+            else
+              printf '::error file=%s::%s\n' "$y" "$msg"
+              rc=1
+            fi
+          done
+          exit "$rc"

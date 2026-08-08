@@ -13,16 +13,26 @@ Config keys below were read out of the actual `.conf.dist` files at the versions
 **This section is the canonical per-phase checklist. If a per-phase value appears anywhere else in
 these docs, it is a copy; this is the original.**
 
-Five config files move per phase — `worldserver.conf`, `playerbots.conf`,
-`mod-rdf-expansion.conf`, `mod_ahbot.conf` and `mod_assistant.conf` — plus **one SQL statement**,
-which is the part everyone forgets. Read
-[the account.expansion trap](#the-accountexpansion-trap-read-this-first) immediately below first,
-because without that statement flipping the config does nothing for existing players.
+**One key defines a phase: `MaxPlayerLevel`.** Everything else on this page is bookkeeping that has
+to stay in step with it — the bot level window, the dungeon finder's expansion, the auction-house
+bot's level ceiling, and the mod-assistant profession and flight-path tiers. Five config files
+move: `worldserver.conf`, `playerbots.conf`, `mod-rdf-expansion.conf`, `mod_ahbot.conf` and
+`mod_assistant.conf`. **No SQL moves.**
+
+`Expansion` stays at `2` in all three phases, so every race and class is available from phase 1 and
+the `CharacterCreating.Disabled.*` masks stay at their upstream `0`. That is the deliberate call
+described in [../README.md](../README.md#the-tradeoff-outland-is-open-at-58) and restated with its
+costs in [§2](#the-accepted-tradeoff-outland-and-northrend-are-reachable) below. It removes the
+worst failure mode the strict version had: a per-phase `UPDATE account SET expansion` that, when
+missed, silently stranded every existing account on the old expansion.
 
 What each module is and why it is installed lives in [modules.md](modules.md); the values its keys
 take per phase live here.
 
-### The `account.expansion` trap (read this first)
+### `account.expansion` — the one-time setup step
+
+Do this **once, before first boot**, not per phase. It is one line and it is easy to skip because
+nothing visibly breaks until someone tries to make a Death Knight.
 
 `Expansion` in `worldserver.conf` is **not** the value the game uses. It is a *ceiling* applied at
 login. From `src/server/game/Server/WorldSocket.cpp`:
@@ -33,72 +43,88 @@ if (Expansion > world_expansion)
     Expansion = world_expansion;
 ```
 
-The session's effective expansion is `min(account.expansion, Expansion)`. And
-`AccountMgr::CreateAccount` stamps the `account.expansion` column with `CONFIG_EXPANSION` **at the
-moment the account is created**:
+The session's effective expansion is `min(account.expansion, Expansion)`. The column is stamped by
+`AccountMgr::CreateAccount` with `CONFIG_EXPANSION` **at the moment the account is created**:
 
 ```cpp
 stmt->SetData(3, uint8(sWorld->getIntConfig(CONFIG_EXPANSION)));
 ```
 
-So every account created during phase 1 has `account.expansion = 0` permanently. Flipping
-`worldserver.conf` to `Expansion = 1` gives `min(0, 1) = 0` — **those accounts stay in Classic
-forever**, silently. They will be unable to enter Outland or create a Blood Elf while a brand-new
-account made after the flip works fine. This is the single most likely way to break a phase flip.
+So the setup step is really "make sure `Expansion = 2` is in `worldserver.conf` before the first
+account exists". `2` is also the upstream default (`worldserver.conf.dist` ships `Expansion = 2`),
+so the only way to get this wrong is to actively write a lower number and then raise it later.
+Playerbot accounts go through the same function — `RandomPlayerbotFactory` calls
+`sAccountMgr->CreateAccount(accountName, password)` — so the `rndbot%` accounts are stamped `2`
+too, on the first boot that creates them.
 
-Fix, on the **auth** database, as part of every flip —
-[step 4 of the flip procedure](#flip-procedure) is the exact command to run it with:
+Run this once anyway, as a belt-and-braces line in bring-up, and again any time you have restored
+an old auth dump:
 
 ```sql
-UPDATE account SET expansion = 1;   -- phase 2; use 2 for phase 3
+UPDATE account SET expansion = 2;
 ```
 
-Or per account in-game: `.account set addon <accountname> <0-2>`. That command is itself capped by
-`CONFIG_EXPANSION`, so raise `worldserver.conf` first, then the column.
+Verify rather than assume — one query, and it covers real accounts and bots at once:
 
-This applies to playerbot accounts too (`rndbot%` prefix) — bots need the column raised before they
-will path into Outland or Northrend.
+```bash
+docker compose exec -T mysql \
+  mysql --defaults-extra-file=/etc/mysql/backup.cnf acore_auth \
+  -e "SELECT expansion, COUNT(*) FROM account GROUP BY expansion;"
+```
+
+Anything other than a single `2` row means somebody booted once with a lower `Expansion`. The
+in-game equivalent is `.account set addon <accountname> 2`, and it is capped by `CONFIG_EXPANSION`,
+so the config has to be right first either way.
 
 ### Everything that moves, in one table
 
-Every per-phase change, in every file. Nothing else needs to change. The per-phase blocks below are
-the same thing in copy-paste form.
+Every per-phase change, in every file. Nothing else needs to change — and nothing in the auth
+database changes at all. The per-phase blocks below are the same thing in copy-paste form.
 
 | File | Key | P1 (60) | P2 (70) | P3 (80) | Takes effect on |
 |---|---|---|---|---|---|
 | `worldserver.conf` | `MaxPlayerLevel` | `60` | `70` | `80` | **restart only** |
-| `worldserver.conf` | `Expansion` | `0` | `1` | `2` | **restart only** |
-| `worldserver.conf` | `CharacterCreating.Disabled.RaceMask` | `1536` | `0` | `0` | `.reload config` |
-| `worldserver.conf` | `CharacterCreating.Disabled.ClassMask` | `32` | `32` | `0` | `.reload config` |
 | `playerbots.conf` | `AiPlayerbot.RandomBotMaxLevel` | `60` | `70` | `80` | restart |
 | `playerbots.conf` | `AiPlayerbot.RandomBotMaps` | `0,1` | `0,1,530` | `0,1,530,571` | restart |
-| `playerbots.conf` | `AiPlayerbot.DisableDeathKnightLogin` | `1` | `1` | `0` | restart |
 | `playerbots.conf` | `AiPlayerbot.botActiveAloneSmartScaleWhenMaxLevel` | `60` | `70` | `80` | restart |
 | `mod-rdf-expansion.conf` | `RDF.Expansion` | `0` | `1` | `2` | restart |
 | `mod_ahbot.conf` | `AuctionHouseBot.EquipItemUseOrEquipLevelRestrict.MaxLevel` | `60` | `70` | `80` | restart, or `.ahbot reload` |
 | `mod_assistant.conf` | `Assistant.Professions.Master.Enabled` | `0` | `1` | `1` | restart |
 | `mod_assistant.conf` | `Assistant.Professions.GrandMaster.Enabled` | `0` | `0` | `1` | restart |
 | `mod_assistant.conf` | `Assistant.FlightPaths.WrathOfTheLichKing.Enabled` | `0` | `0` | `1` | restart |
-| **`acore_auth`** | `UPDATE account SET expansion` | `0` | `1` | `2` | the account's next login |
+
+Nine keys across five files, down from thirteen keys plus an `UPDATE`. What left the table, and
+why, so nobody reintroduces it from an older draft:
+
+| Was in the table | Now | Why |
+|---|---|---|
+| `Expansion` | fixed at `2` | all races/classes on from phase 1; the cap is the only gate |
+| `CharacterCreating.Disabled.RaceMask` | fixed at `0` (upstream default) | Blood Elf and Draenei are available in phase 1 |
+| `CharacterCreating.Disabled.ClassMask` | fixed at `0` (upstream default) | Death Knights are available in phase 1 |
+| `AiPlayerbot.DisableDeathKnightLogin` | fixed at `0` (upstream default) | DK bots from phase 1; see [§5](#5-playerbots-tuning-for-a-3-person-server) |
+| `UPDATE account SET expansion` | one-time, `2` | [above](#accountexpansion--the-one-time-setup-step) |
 
 Rows marked plain *restart* are marked that way because the flip is a restart regardless; whether
 those modules would also pick the key up from `.reload config` is untested and does not matter here.
-The two marked **restart only** are different — they say so from the core, not from caution. In
-`src/server/game/World/WorldConfig.cpp` both are registered `ConfigValueCache::Reloadable::No`:
+The one marked **restart only** is different — it says so from the core, not from caution. In
+`src/server/game/World/WorldConfig.cpp` it is registered `ConfigValueCache::Reloadable::No`:
 
 ```cpp
-SetConfigValue<uint32>(CONFIG_MAX_PLAYER_LEVEL, "MaxPlayerLevel", DEFAULT_MAX_LEVEL, ConfigValueCache::Reloadable::No, ...);
+SetConfigValue<uint32>(CONFIG_MAX_PLAYER_LEVEL, "MaxPlayerLevel", DEFAULT_MAX_LEVEL, ConfigValueCache::Reloadable::No, [](uint32 const& value) { return value > 0 && value <= MAX_LEVEL; }, "> 0 && <= MAX_LEVEL");
 SetConfigValue<uint32>(CONFIG_EXPANSION, "Expansion", 2, ConfigValueCache::Reloadable::No);
 ```
+
+`Expansion` is quoted alongside it because it is the same kind of key and you will want to know
+this the one time you *do* change it — its upstream default is `2`, which is what we run.
 
 `.reload config` will edit neither, and it tells you so rather than failing silently — from
 `ConfigValueCache.h`:
 
 > `Server Config (Name: {}) cannot be changed by reload. A server restart is required to update this config value.`
 
-Grep the console for that line after any flip you attempted without a restart. Since the two keys
-that matter most need a restart, **a phase flip is always a restart**; treat `.reload config` as a
-tuning tool (see [§4](#4-autobalance-tuning)), not a flip tool.
+Grep the console for that line after any flip you attempted without a restart. Since the key that
+defines the phase needs a restart, **a phase flip is always a restart**; treat `.reload config` as
+a tuning tool (see [§4](#4-autobalance-tuning)), not a flip tool.
 
 `mod_ahbot.conf` and `mod_assistant.conf` come from [modules.md](modules.md) §1.4 and §1.5.
 `mod_ahbot.conf` additionally needs a **one-time install step** that is not per-phase — see the
@@ -111,30 +137,55 @@ for all three phases and must not be touched.
 
 ```ini
 # worldserver.conf
-MaxPlayerLevel = 60
-Expansion      = 0
+MaxPlayerLevel = 60          # <- the only key that moves between phases
+
+# ── phase-invariant, but this block is what bring-up.md says to paste before
+#    first boot, so the whole worldserver decision set lives here ─────────────
+
+Expansion = 2                # upstream default. Does NOT move. All races and
+                             # classes on from phase 1; the cap is the only gate.
+                             # Cost of this: ../README.md and §2 below.
+
+# Both are upstream defaults (0) and both stay there. Listed explicitly because
+# an earlier draft of this page set them, and a stale copy would silently
+# re-close Blood Elf, Draenei and Death Knight.
+CharacterCreating.Disabled.RaceMask  = 0
+CharacterCreating.Disabled.ClassMask = 0
 
 StartPlayerLevel       = 1
-StartHeroicPlayerLevel = 55
+StartHeroicPlayerLevel = 55   # DK start level. Validator requires <= MaxPlayerLevel,
+                              # so 55 is legal against a cap of 60. See §2.
 MinDualSpecLevel       = 40
+HeroicCharactersPerRealm = 1  # DKs per account; raise if you want more
+CharacterCreating.MinLevelForHeroicCharacter = 55   # needs another 55+ char on the
+                                                    # account — the real DK brake
 
-# Expansion=0 already blocks these via the DBC expansion field on the race/class
-# entry (CharacterHandler.cpp: raceEntry->expansion > Expansion()). These masks are
-# belt-and-braces: they fail the create screen earlier and cover anything that
-# constructs characters without a real session (see the playerbot caveat below).
-CharacterCreating.Disabled.RaceMask  = 1536   # 512 Blood Elf + 1024 Draenei
-CharacterCreating.Disabled.ClassMask = 32     # Death Knight
+# Rates. §3 owns these numbers and explains what each one does and does not do.
+Rate.XP.Kill     = 2
+Rate.XP.Quest    = 2
+Rate.XP.Quest.DF = 2
+Rate.XP.Explore  = 2
+Rate.XP.Pet      = 2
 
-Rate.XP.Kill     = 1.5
-Rate.XP.Quest    = 1.5
-Rate.XP.Quest.DF = 1.5
-Rate.XP.Explore  = 1.5
-Rate.XP.Pet      = 1.5
+Rate.Reputation.Gain = 10
+# Rate.Reputation.LowLevel.Kill / .LowLevel.Quest deliberately left at their
+# default 1 — they multiply on top of Gain. §3.
 
-# Phase-invariant, but it belongs in this block because this block is what
-# bring-up.md tells you to paste before first boot. Default is 0, and there is
-# no worldserver-cli binary — without SOAP, scripts/phase.sh and the weekly
-# restart in hosting.md §7.6 have no way to reach a running server.
+Rate.Drop.Item.Poor      = 3
+Rate.Drop.Item.Normal    = 3
+Rate.Drop.Item.Uncommon  = 3
+Rate.Drop.Item.Rare      = 3
+Rate.Drop.Item.Epic      = 3
+Rate.Drop.Item.Legendary = 3
+Rate.Drop.Item.Artifact  = 3
+Rate.Drop.Money          = 3
+# Rate.Drop.Item.Referenced / .ReferencedAmount / .GroupAmount left at 1. §3.
+
+Rate.Talent = 1.4            # 71 points at 60 / 85 at 70 / 99 at 80. §3.
+
+# Default is 0, and there is no worldserver-cli binary — without SOAP,
+# scripts/phase.sh and the weekly restart in hosting.md §7.6 have no way to
+# reach a running server.
 SOAP.Enabled = 1
 ```
 
@@ -142,8 +193,10 @@ SOAP.Enabled = 1
 # playerbots.conf
 AiPlayerbot.RandomBotMinLevel = 1
 AiPlayerbot.RandomBotMaxLevel = 60
-AiPlayerbot.RandomBotMaps     = 0,1          # Eastern Kingdoms, Kalimdor only
-AiPlayerbot.DisableDeathKnightLogin = 1
+AiPlayerbot.RandomBotMaps     = 0,1          # Eastern Kingdoms, Kalimdor only —
+                                             # bots capped at 60 have no business
+                                             # in Outland even though it is open
+AiPlayerbot.DisableDeathKnightLogin = 0      # upstream default; DK bots from phase 1
 AiPlayerbot.botActiveAloneSmartScaleWhenMaxLevel = 60
 ```
 
@@ -189,26 +242,21 @@ Assistant.FlightPaths.WrathOfTheLichKing.Enabled = 0
 > conf: the comment block above `EquipItemUseOrEquipLevelRestrict.MaxLevel` claims `Default: 0`,
 > but the line it documents — and the code default — is `999`.)
 
-```sql
-UPDATE account SET expansion = 0;
-```
+No SQL. `account.expansion` was set to `2` once at
+[setup](#accountexpansion--the-one-time-setup-step) and never moves again.
 
 ### Phase 2 — TBC, cap 70
 
 ```ini
 # worldserver.conf
 MaxPlayerLevel = 70
-Expansion      = 1
-
-CharacterCreating.Disabled.RaceMask  = 0      # Blood Elf + Draenei open
-CharacterCreating.Disabled.ClassMask = 32     # Death Knight still closed
+# Expansion stays 2. The masks stay 0. Nothing else in this file moves.
 ```
 
 ```ini
 # playerbots.conf
 AiPlayerbot.RandomBotMaxLevel = 70
 AiPlayerbot.RandomBotMaps     = 0,1,530       # + Outland
-AiPlayerbot.DisableDeathKnightLogin = 1
 AiPlayerbot.botActiveAloneSmartScaleWhenMaxLevel = 70
 ```
 
@@ -227,28 +275,20 @@ Assistant.Professions.GrandMaster.Enabled        = 0
 Assistant.FlightPaths.WrathOfTheLichKing.Enabled = 0
 ```
 
-```sql
-UPDATE account SET expansion = 1;
-```
+No SQL.
 
 ### Phase 3 — WotLK, cap 80
 
 ```ini
 # worldserver.conf
 MaxPlayerLevel = 80
-Expansion      = 2
-
-CharacterCreating.Disabled.RaceMask  = 0
-CharacterCreating.Disabled.ClassMask = 0
-HeroicCharactersPerRealm             = 1      # DKs per account; raise if you want more
-CharacterCreating.MinLevelForHeroicCharacter = 55
+# Expansion is already 2 and always was. This phase changes one number.
 ```
 
 ```ini
 # playerbots.conf
 AiPlayerbot.RandomBotMaxLevel = 80
 AiPlayerbot.RandomBotMaps     = 0,1,530,571   # + Northrend (upstream default)
-AiPlayerbot.DisableDeathKnightLogin = 0
 AiPlayerbot.botActiveAloneSmartScaleWhenMaxLevel = 80
 ```
 
@@ -267,52 +307,65 @@ Assistant.Professions.GrandMaster.Enabled        = 1   # 450, WotLK ceiling
 Assistant.FlightPaths.WrathOfTheLichKing.Enabled = 1
 ```
 
-```sql
-UPDATE account SET expansion = 2;
-```
+No SQL. Phase 3 is the upstream default configuration in every respect except the rates.
 
 ### What does *not* change per phase
 
+- **`Expansion`.** `2`, always. Every race and class is creatable from phase 1 — Death Knight,
+  Blood Elf, Draenei. `CharacterCreating.Disabled.RaceMask` and `.ClassMask` stay at their upstream
+  `0`. This is the change that makes the flip one key instead of thirteen, and its cost is
+  [§2](#the-accepted-tradeoff-outland-and-northrend-are-reachable).
+- **`account.expansion`.** Set once at
+  [setup](#accountexpansion--the-one-time-setup-step). There is no per-phase `UPDATE` any more, and
+  if you find one in an older copy of these notes, delete it — running `UPDATE account SET
+  expansion = 0` would lock every account out of two thirds of the game.
 - **AutoBalance.** Nothing in it keys off `MaxPlayerLevel`; it scales off the actual level of the
   highest player in the instance. It follows the cap automatically. You may still want to retune
   `InflectionPointRaid*` per phase, because the raid content itself changes (40-mans in phase 1,
   Karazhan in phase 2, 10/25s in phase 3) — see [§4](#4-autobalance-tuning).
-- **`Rate.XP.*`.** 1.5× throughout.
-- **Talents, spellbook, glyphs.** Left at WotLK for all phases, per the brief. Do **not** set
-  `AiPlayerbot.LimitTalentsExpansion = 1` — it exists to clamp bot talent trees to 6 rows below level
-  61 / 8 rows below 71, which would make bots weaker than the humans they're playing alongside.
+- **All four rates.** XP 2×, reputation 10×, loot 3×, `Rate.Talent = 1.4` — throughout, every
+  phase. [§3](#3-xp-and-rates).
+- **Talents, spellbook, glyphs.** Left at WotLK for all phases, per the brief, and now with 20
+  extra points at the phase-1 cap on top. Do **not** set `AiPlayerbot.LimitTalentsExpansion = 1` —
+  it exists to clamp bot talent trees to 6 rows below level 61 / 8 rows below 71, which would make
+  bots weaker than the humans they're playing alongside, and it interacts badly with a 1.4× point
+  budget they can't spend.
 
 ### Flip procedure
 
 ```bash
 # 1. Announce, in-game, a few days ahead and again on the night.
-.announce Phase 2 opens in 5 minutes. Dark Portal, Outland, Blood Elves and Draenei. Server restarting.
+.announce Phase 2 opens in 5 minutes. The cap goes to 70 and Outland is worth doing. Server restarting.
 
 # 2. Graceful shutdown with a 300s countdown; the client shows a timer and
 #    saves are flushed.
 .server shutdown 300
 
-# 3. Edit the five confs. Version them; never hand-edit on the box.
+# 3. Edit the five confs — eight keys. Version them; never hand-edit on the box.
 #    (scripts/phase.sh does this from the repo copies — spec below.)
 
-# 4. Raise the account column. THIS IS THE STEP THAT GETS MISSED.
-#    Run from /srv/wow/wowserver/deploy, same as step 5. There is no mysql client
-#    on the host and the mysql service publishes no ports, so the query runs
-#    inside the container; the password comes from the mounted 0600 option file,
-#    never from -p on a command line (hosting.md 7.3).
-docker compose exec -T mysql \
-  mysql --defaults-extra-file=/etc/mysql/backup.cnf acore_auth \
-  -e "UPDATE account SET expansion = 1;"
-
-# 5. Restart.
+# 4. Restart.
 docker compose up -d
 
-# 6. Verify — see below.
+# 5. Verify — see below.
 ```
 
-`/etc/mysql/backup.cnf` is `deploy/mysql-backup.cnf` bind-mounted into the mysql service — 0600,
-gitignored, generated by `scripts/backup.sh` from `deploy/.env`. Where it comes from, why
-`--defaults-extra-file` has to be the first argument, and what to do if it is missing:
+Four steps, and none of them is SQL. The old step 4 — `UPDATE account SET expansion = N`, the one
+that got missed — is gone: the column was set to `2` once at
+[setup](#accountexpansion--the-one-time-setup-step) and there is nothing left for a flip to
+desync. If you need a database query for anything on this page, the form is:
+
+```bash
+docker compose exec -T mysql \
+  mysql --defaults-extra-file=/etc/mysql/backup.cnf acore_auth -e "…"
+```
+
+run from `/srv/wow/wowserver/deploy`. There is no mysql client on the host and the mysql service
+publishes no ports, so the query runs inside the container; the password comes from the mounted
+0600 option file, never from `-p` on a command line. `/etc/mysql/backup.cnf` is
+`deploy/mysql-backup.cnf` bind-mounted into the mysql service — 0600, gitignored, generated by
+`scripts/backup.sh` from `deploy/.env`. Where it comes from, why `--defaults-extra-file` has to be
+the first argument, and what to do if it is missing:
 [hosting.md §7.3](hosting.md#73-backups). Every DB query on this page uses that form.
 
 Verification checklist, in this order — each one catches a different failure:
@@ -321,24 +374,35 @@ Verification checklist, in this order — each one catches a different failure:
 |---|---|---|
 | Config actually loaded | worldserver console at boot | no `Missing name`/`Invalid value` lines for the keys you touched |
 | Cap moved | on a throwaway char at the old cap, kill something | XP bar advances past the old cap |
-| Session expansion | log in a **pre-existing** account, `.account` | expansion reads the new value, not the old |
-| Map access | walk a real char through the Dark Portal | no "you must have Burning Crusade" transfer abort |
-| Race/class create | character create screen | Blood Elf/Draenei selectable |
-| RDF | open Dungeon Finder at cap | random dungeon entry is offered and queueable |
+| Talents scaled with it | `.character level` a throwaway to the new cap, open the talent frame | 85 points at 70, 99 at 80 — `Rate.Talent` multiplies the *total*, so it grows with the cap |
+| RDF | open Dungeon Finder at cap | random dungeon entry is offered and queueable, and it offers the phase's expansion |
 | Bots followed | `.playerbots bot list`, check a bot's level | bots exist above the old cap after a randomize cycle |
+| AH bot ceiling | browse the auction house | nothing listed above the new cap's gear level |
 
 The RDF check is the one that fails quietly. Do not skip it.
+
+Two checks that were in this list and are now permanently unnecessary — do not re-add them from an
+older copy: *"session expansion reads the new value"* and *"walk a real char through the Dark
+Portal"*. Both tested a per-phase expansion move that no longer happens. The Dark Portal works in
+every phase, on purpose.
 
 ### `scripts/phase.sh` — spec
 
 One argument, `1`, `2` or `3`. Idempotent: running it twice for the same phase is a no-op plus a
-restart. It does four things, in this order.
+restart. It does three things, in this order.
 
 **1. Rewrite the confs.** The repo holds the deployed `.conf` files; the script rewrites in place
-the thirteen keys in [the table above](#everything-that-moves-in-one-table) across the five files,
+the eight keys in [the table above](#everything-that-moves-in-one-table) across the five files,
 then writes them to the container's config volume. Rewrite by key (`^\s*Key\s*=`), never by line
 number — module confs get new keys upstream and line numbers rot. Refuse to run if a key the script
-expects to find is absent: a silently-skipped `Expansion` is exactly the failure §1 opens with.
+expects to find is absent: a silently-skipped `MaxPlayerLevel` is a flip that did nothing but
+restart the server.
+
+The script must **not** touch `Expansion`, `CharacterCreating.Disabled.RaceMask`,
+`CharacterCreating.Disabled.ClassMask` or `AiPlayerbot.DisableDeathKnightLogin`. They are not
+phase keys. A `phase.sh` inherited from the strict-gating draft would set them, and setting
+`Expansion = 0` on a realm whose accounts are stamped `2` clamps every session to Classic — the
+same outage the old design risked, arrived at from the opposite direction.
 
 **2. Announce and shut down.** Needs a channel into the running server, and this is where people
 get stuck: **AzerothCore builds no `worldserver-cli`.** `src/server/apps/` contains exactly two
@@ -374,15 +438,13 @@ targets, `authserver` and `worldserver`. The GM console is `worldserver`'s own s
   `ACSoap.cpp`, `if (AccountMgr::GetSecurity(accountId) < SEC_ADMINISTRATOR) return 403;` — with a
   row in `account_access` at `RealmID = -1`. Account creation is in [bring-up.md](bring-up.md).
 
-**3. `UPDATE account SET expansion = N` on `acore_auth`.** Unconditional, every flip, including a
-re-run. Cheap and idempotent, and it is the step that gets missed. Use the same
-`docker compose exec -T mysql mysql --defaults-extra-file=…` form as
-[step 4 above](#flip-procedure), from `/srv/wow/wowserver/deploy` — the script must not put a
-password on a command line, and it has no host-side mysql client to use even if it wanted to.
+**3. Restart and verify.** `docker compose up -d`, then re-run the verification checklist above.
+Do not offer a `--reload` mode: `MaxPlayerLevel` is `Reloadable::No`, so a reload-only flip changes
+the bots and the dungeon finder while leaving the cap where it was — the worst possible half-state.
 
-**4. Restart and verify.** `docker compose up -d`, then re-run the verification checklist above.
-Do not offer a `--reload` mode: `MaxPlayerLevel` and `Expansion` are `Reloadable::No`, so a
-reload-only flip is guaranteed to be a half-flip.
+There is no database step. The script touches no SQL at all, which also means it needs no auth-DB
+credentials; if a version of `phase.sh` asks for `deploy/.env`, it is doing something this spec
+does not ask for.
 
 ### Going backwards
 
@@ -412,44 +474,81 @@ gets dumped back to `RandomBotMinLevel` (`1`, in the config above) — which is 
 you need over-cap bots gone quickly, wiping with `AiPlayerbot.DeleteRandomBotAccounts` (see
 [§5](#first-boot-the-bots-are-built-before-the-server-opens)) is the blunt but predictable option.
 
-**The account column is a one-way ratchet in practice.** Lowering `Expansion` in `worldserver.conf`
-does clamp everyone immediately — the session takes `min(account.expansion, Expansion)` — so you do
-*not* need SQL to walk it back, and the stale-high column is harmless while the config is low. But
-it is stale, so a later re-raise of the config silently re-grants the higher expansion without
-anyone running the SQL. And you cannot repair a lowered config from in-game: `.account set addon`
-refuses anything above the config value —
+**Talent points shrink, and the spent points do not come back cleanly.** `CalculateTalentsPoints`
+recomputes from level, so dropping the cap 70 → 60 takes a character from 85 points to 71. The
+talents themselves are still spent in the tree. Expect to hand out `.reset talents` after any
+backwards cap move; see [§3](#talents--ratetalent--14) for the arithmetic.
+
+**`Expansion` no longer participates**, which is most of why going backwards is now survivable at
+all. It sits at `2` in every phase, so there is no expansion to walk back, no
+`min(account.expansion, Expansion)` clamp to reason about, and no stale auth column waiting to
+silently re-grant something at the next forward flip. Leave it alone in both directions.
+
+If you ever do lower it — don't, but if — know that the session clamp bites immediately while the
+`account.expansion` column stays high and stale, and that you cannot repair it from in-game,
+because `.account set addon` refuses anything above the config value:
 
 ```cpp
 if (!expansion || *expansion > sWorld->getIntConfig(CONFIG_EXPANSION))
     return false;
 ```
 
-— so raising an account always means raising `worldserver.conf` **and restarting** first. If you go
-backwards, run the matching `UPDATE account SET expansion = N` too — same command shape as
-[step 4 of the flip procedure](#flip-procedure) — so the column and the config agree and the next
-forward flip is honest.
+So raising an account always means raising `worldserver.conf` **and restarting** first. That
+asymmetry is exactly what the fixed `Expansion = 2` design exists to avoid.
 
-**What reverses cleanly:** `RDF.Expansion`, the `CharacterCreating.Disabled.*` masks (they only gate
-the create screen, existing characters are untouched), the AH bot's level restriction, and the
-`mod-assistant` toggles. Characters already created stay created — turning the Blood Elf mask back
-on does not delete anyone's Blood Elf.
+**What reverses cleanly:** `RDF.Expansion`, the AH bot's level restriction, and the
+`mod-assistant` toggles. Characters already created stay created regardless.
 
 ---
 
 ## 2. Phase gotchas
 
-### RDF is broken at levels 59–60 and 69–70 without a module
+### The accepted tradeoff: Outland and Northrend are reachable
 
-This is the biggest one and it is a **client** limitation, not a server bug.
+State this plainly rather than discovering it in play. **With `Expansion = 2` from phase 1, the
+Dark Portal works at 58 and the boats and zeppelins to Northrend work at 68.** Nothing is closed.
+The level cap is the only gate, and it is a soft one: it makes the next expansion pointless rather
+than forbidden.
 
-The 3.3.5 client decides which "Random Dungeon" entry to show you from your level alone. From the
-[mod-rdf-expansion](https://github.com/azerothcore/mod-rdf-expansion) README:
+This was a deliberate call. The reasoning, so it can be re-argued rather than re-litigated:
+
+**Why it is fine.** XP is discarded at cap — `Player::GiveXP` returns immediately once
+`level >= CONFIG_MAX_PLAYER_LEVEL` — so a level-60 in Hellfire Peninsula earns nothing, unlocks
+nothing and advances no character. There is no race to get ahead because there is no ahead. What
+the strict version bought in exchange for its thirteen keys was mostly *aesthetics*: the boats
+still existed, the Northrend questgivers still stood in Stormwind Harbour, Silvermoon was still
+walkable on map 0. It closed a handful of maps and cost two genuine outages for it — the
+`account.expansion` desync that silently stranded existing accounts, and RDF dying at 59–60
+because the client offers only TBC dungeons that an expansion-0 session then refuses. Both of
+those are now structurally impossible.
+
+**What it costs.** Someone determined can walk through the portal at 58 and come back with Outland
+greens and quest rewards that outclass anything phase 1 can drop, and a geared 60 could farm
+Ramparts. Dungeon and raid *lockouts* do not care about your level either, so a phase-1 group
+could in principle go clear Karazhan. There is no config that closes this without `Expansion = 0`,
+which brings both outages back with it. With three friends, "don't do that" is a cheaper
+enforcement mechanism than a config key, and cheaper still than the zone-blocker modules that
+exist for this — deliberately not installed, because the entire point is that a phase flip is one
+key.
+
+Second-order consequences worth knowing before someone finds them:
+
+- **Flying works in Outland in phase 1.** Expert Riding is a level-60 skill in 3.3.5 (it was moved
+  down from 70 in patch 3.0.2), so a capped phase-1 character can train it and fly. There is still
+  no flying in Eastern Kingdoms or Kalimdor in any phase — Azeroth did not become flyable until
+  Cataclysm.
+- **Cold Weather Flying is level 77**, so Northrend flight is self-gating until phase 3 regardless.
+- **Death Knights exist from phase 1** — see [below](#death-knights).
+- **Caverns of Time instances are open**, because they are expansion-1 maps and nothing gates them
+  any more.
+
+### RDF at levels 59–60 and 69–70 — the module is still wanted, for a different reason
 
 > Up to character level 58, you can join the "Random Classic Dungeon". However, once the character
 > level hits 59, you can no longer join "Random Classic Dungeon" but you can only join "Random
 > Burning Crusade Dungeon". This is a client limitation.
 
-Meanwhile the server filters the LFG list by expansion. From `LFGMgr.cpp`:
+The server then filters the LFG list by the session's expansion. From `LFGMgr.cpp`:
 
 ```cpp
 else if (dungeon->expansion > expansion || (onlySeasonalBosses && !dungeon->seasonal))
@@ -460,12 +559,18 @@ else if (dungeon->expansion > expansion || (onlySeasonalBosses && !dungeon->seas
 && dungeon.expansion <= expansion && dungeon.minlevel <= level && level <= dungeon.maxlevel
 ```
 
-Put those together for phase 1: a level 59–60 character is offered only "Random Burning Crusade
-Dungeon" (expansion 1) by the client, and the server refuses it because the session is expansion 0.
-**RDF is completely unusable for the last two levels of phase 1** — exactly the levels your friends
-will spend the most time at. Same trap at 69–70 in phase 2.
+**`Expansion = 2` defuses the hard failure.** In the strict design a level-59 in phase 1 was
+offered only "Random Burning Crusade Dungeon" and the server refused it with
+`LFG_LOCKSTATUS_INSUFFICIENT_EXPANSION` — RDF was simply dead for the last two levels of phases 1
+and 2, at exactly the levels people spend the most time. With the session at expansion 2 that
+lockout cannot fire, so RDF always works.
 
-`azerothcore/mod-rdf-expansion` exists precisely for this. It hijacks the queue type:
+What is left is a *flavour* problem rather than an outage, and it is still worth fixing: without
+the module, a level-59 in phase 1 queues and gets dropped into Hellfire Ramparts. The dungeon
+finder becomes the fastest route to the tradeoff described above — it will actively send you to
+Outland, unasked, one level before the cap.
+
+`azerothcore/mod-rdf-expansion` hijacks the queue type so that does not happen:
 
 ```ini
 #     RDF.Expansion
@@ -477,11 +582,16 @@ will spend the most time at. Same trap at 69–70 in phase 2.
 RDF.Expansion = 2
 ```
 
-So this module is **required**, not optional, for phases 1 and 2. Add it to `modules.txt` now.
-It is maintained in the azerothcore org and has no core patch. ChromieCraft runs progressive caps on
-AzerothCore and hits this same problem; the module living in the official org is the strongest
-signal that this is the sanctioned fix. *(That ChromieCraft specifically ships it in their
-production config: verify.)*
+At `RDF.Expansion = 0` a phase-1 level-59 who queues the only entry the client will show them gets
+a Classic dungeon. **Keep the module and keep the key per-phase** — it is the one thing still
+holding the dungeon finder inside the phase. It is maintained in the azerothcore org and has no
+core patch. ChromieCraft runs progressive caps on AzerothCore and hits the same client limitation;
+the module living in the official org is the strongest signal that this is the sanctioned fix.
+*(That ChromieCraft specifically ships it in their production config: verify.)*
+
+Its status has changed, though: it went from **required** (without it, no RDF at all at 59–60) to
+**strongly wanted** (without it, RDF works but ships you to the wrong expansion). If a build ever
+has to drop it, phases 1 and 2 are playable; they just leak.
 
 Note also that RDF only ever hands out dungeons whose `maxlevel` covers you, so at cap the pool is
 small. RDF also will not queue a group of three at all, which is the other half of the problem, and
@@ -491,7 +601,7 @@ module, no core patch, see [modules.md](modules.md) §1.3. Install it, but read
 
 ### Death Knights
 
-Blocked automatically at `Expansion < 2`. `CharacterHandler.cpp`:
+**Available from phase 1.** The gate is `CharacterHandler.cpp`:
 
 ```cpp
 // prevent character creating Expansion class without Expansion account
@@ -500,8 +610,10 @@ if (classEntry->expansion > Expansion())
     SendCharCreate(CHAR_CREATE_EXPANSION_CLASS);
 ```
 
-The DK class entry is expansion 2, so phases 1 and 2 reject it with no config needed. The
-prerequisite-level option you were looking for is:
+The DK class entry is expansion 2 and the session is expansion 2, so the check passes in every
+phase. `CharacterCreating.Disabled.ClassMask` stays at its upstream `0`.
+
+What actually paces DKs is the level prerequisite, and the defaults are the right numbers:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -509,33 +621,57 @@ prerequisite-level option you were looking for is:
 | `HeroicCharactersPerRealm` | `1` | how many DKs one account may have |
 | `StartHeroicPlayerLevel` | `55` | level a new DK starts at |
 
-**Do not enable DKs during phase 1.** A DK starts at 55 against a cap of 60 — five levels of content
-and an instant free character. Even in phase 3, note that `StartHeroicPlayerLevel = 55` plus a cap of
-80 is the Blizzlike arrangement and needs no change.
+So nobody rolls a DK on night one: you need a 55 first, which in a phase-1 world is most of the
+levelling curve. Then you get one DK per account, starting at 55 against a cap of 60. That is five
+levels of content on a free character — a real shortcut, and the accepted price of "all classes on
+from phase 1". If it turns out to matter, `MinLevelForHeroicCharacter` is the dial (raise it to
+60 and a DK costs you a capped character first); do not reach for `ClassMask`.
 
-`AiPlayerbot.DisableDeathKnightLogin = 1` is the matching bot-side switch. The playerbots conf
-alludes to this too — "each account has 10 bots (or 9 if WotLK is disabled), one bot for each class."
+`StartHeroicPlayerLevel = 55` is validated against `MaxPlayerLevel`
+(`value > 0 && value <= CONFIG_MAX_PLAYER_LEVEL`), so it is legal at a cap of 60 and needs no
+per-phase change. Note the corollary: this is another reason never to drop the cap below 55.
+
+**Bot side: `AiPlayerbot.DisableDeathKnightLogin = 0`** — the upstream default, and it now stays
+there in all three phases. DK bots handle their own level floor;
+`RandomPlayerbotMgr::RandomizeFirst` does
+
+```cpp
+if (bot->getClass() == CLASS_DEATH_KNIGHT)
+{
+    maxLevel = std::max(maxLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
+    minLevel = std::max(minLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
+}
+```
+
+so in phase 1 DK bots roll into `[55, 60]` rather than the `[1, 60]` window everyone else uses.
+No config needed. The knock-on for first boot is in [§5](#5-playerbots-tuning-for-a-3-person-server):
+with DKs available, each bot account holds 10 characters instead of 9.
 
 ### Blood Elf / Draenei
 
-Same mechanism, race side — both are expansion 1 in `ChrRaces.dbc`, so `Expansion = 0` rejects them
-with `CHAR_CREATE_EXPANSION`.
+**Available from phase 1.** Both are expansion 1 in `ChrRaces.dbc` and the session is expansion 2,
+so `CHAR_CREATE_EXPANSION` never fires. `CharacterCreating.Disabled.RaceMask` stays at its upstream
+`0` — an earlier draft set it to `1536`, and that number should not reappear anywhere.
 
-Gotcha: **their starting zones are on the Classic continents and stay physically reachable.** Eversong
-Woods, Ghostlands and Silvermoon are on map 0; Azuremyst, Bloodmyst and The Exodar are on map 1. The
-`Expansion` check gates *maps* and *character creation*, not zones-within-a-map. In phase 1 anyone can
-walk into Silvermoon, and random bots teleporting around map 0/1 may pick those zones as leveling
-targets. Harmless, but it looks odd, and it means the "Classic" phase is not visually Classic.
+The thing this makes moot, worth recording because it was a real argument for the strict design:
+their starting zones sit on the Classic continents and were always physically reachable. Eversong
+Woods, Ghostlands and Silvermoon are on map 0; Azuremyst, Bloodmyst and The Exodar are on map 1.
+`Expansion` gates *maps* and *character creation*, never zones-within-a-map, so phase 1 was never
+going to look visually Classic no matter what the mask said. Now the population matches the
+scenery.
 
-There is no clean config fix. Live with it, or restrict bot teleport targets (see
-`AiPlayerbot.RandomBotMaps`, which is map-level only and so cannot express this).
+Bots follow automatically: `RandomPlayerbotFactory::IsValidRaceClassCombination` takes
+`CONFIG_EXPANSION`, so at `2` the first-boot roster rolls Blood Elves and Draenei alongside
+everything else — see [§5](#bot-roster-composition-settled-at-first-boot).
 
 ### Flying mounts
 
-Not a problem in practice, for a reason that surprises people: **there is no flying in Eastern
-Kingdoms or Kalimdor in 3.3.5 at all** — Azeroth did not become flyable until Cataclysm. So phase 1
-has no flying regardless of config. Phase 2 opens Outland (map 530), where flying works normally.
-Cold Weather Flying is a level-77 Northrend skill and is therefore self-gating until phase 3.
+**Flyable in Outland from phase 1**, which surprises people twice over. There is no flying in
+Eastern Kingdoms or Kalimdor in 3.3.5 at all — Azeroth did not become flyable until Cataclysm — so
+"can they fly?" is only ever a question about Outland and Northrend. Outland is open in every
+phase, and Expert Riding is a **level-60** skill in 3.3.5 (moved down from 70 in patch 3.0.2), so a
+capped phase-1 character can train it and fly there. Cold Weather Flying is level 77 and therefore
+self-gating until phase 3.
 
 The bot-side mount levels are period-flavour only:
 
@@ -564,31 +700,36 @@ announce.
 Not expansion-gated as items — `Expansion` gates maps, races and classes, not the item table. An
 heirloom handed to a level-1 character in phase 1 works and scales correctly up to the current cap.
 
-But they are effectively unobtainable in phases 1–2, because the vendors are all in Northrend
-(Emblem of Heroism vendors in Dalaran, Champion's Seal vendors at the Argent Tournament) or on
-Wintergrasp/BG currency, and map 571 is blocked. *(Exact vendor set: verify.)* Net effect: heirlooms
-arrive naturally with phase 3 and you don't have to do anything. If you want the XP bonus earlier,
-GM-grant them — nothing will break.
+They are still effectively unobtainable in phases 1–2, but the reason has changed: it is no longer
+the map. Northrend is reachable now. It is the **currency**, which is level-gated rather than
+expansion-gated — Emblems of Heroism come from level-80 heroics, Champion's Seals from Argent
+Tournament dailies that require 80, and Stone Keeper's Shards from Wintergrasp. *(Exact vendor and
+currency set: verify.)* A level-60 can walk to Dalaran and look at the vendor; they cannot pay it.
 
-### WotLK content still exists in the world DB at Expansion=0
+Net effect is unchanged: heirlooms arrive naturally with phase 3 and you do not have to do
+anything. If you want the XP bonus earlier, GM-grant them — nothing will break. Note they multiply
+on top of the 2×.
 
-Yes, and mostly it doesn't matter. `Expansion` performs no filtering of `quest_template`,
-`item_template`, or creature spawns on the Classic maps. Concretely, in phase 1 you will still see:
+### Off-phase content is visible, reachable, and worth nothing
 
-- Northrend-bound quest chains and their questgivers in Stormwind Harbour and Orgrimmar.
-- The boats/zeppelins to Northrend, physically present and boardable. Using one produces
-  `TRANSFER_ABORT_INSUF_EXPAN_LVL` — from `Player.cpp`:
-  ```cpp
-  if (GetSession()->Expansion() < mEntry->Expansion())
-  ```
-  The player gets a "you must have Wrath of the Lich King" popup and stays put. Ugly, not broken.
-- WotLK recipes, glyphs and vendor items whose *source* is unreachable.
-- Anything Caverns of Time: those instances are separate maps with expansion 1, so they're blocked in
-  phase 1 even though the Tanaris entrance is on map 1.
+This used to be a section about cosmetic clutter with a hard wall behind it. With `Expansion = 2`
+the wall is gone and only the clutter and the cap remain. `Expansion` never filtered
+`quest_template`, `item_template` or creature spawns anyway. Concretely, in phase 1:
 
-None of this is worth fixing for three friends. It is cosmetic clutter, and it's exactly the "loose
-gating" that was asked for. The one thing to actually tell your friends: **quest XP is discarded at
-cap**, so turning in a stack of banked quests the moment phase 2 opens gains nothing.
+- Northrend-bound quest chains and their questgivers stand in Stormwind Harbour and Orgrimmar, and
+  now you can actually take them.
+- The boats and zeppelins to Northrend work. `TRANSFER_ABORT_INSUF_EXPAN_LVL` —
+  `if (GetSession()->Expansion() < mEntry->Expansion())` in `Player.cpp` — can no longer fire,
+  because the session is always at the ceiling.
+- The Dark Portal works at 58.
+- Caverns of Time instances are open; they are expansion-1 maps and nothing gates them.
+- WotLK recipes, glyphs and vendor items are all sourceable if someone goes and sources them.
+
+**The cap is what makes all of it pointless.** Tell your friends the one thing that actually
+matters: **XP is discarded at cap.** Banking quests to turn in the moment phase 2 opens gains
+nothing, and levelling in Hellfire at 60 gains nothing. Everything else here is a matter of taste,
+and the taste we picked is "the door is open, there is nothing behind it worth having yet" —
+[the tradeoff](#the-accepted-tradeoff-outland-and-northrend-are-reachable).
 
 ### Known core bug
 
@@ -598,13 +739,24 @@ cap**, so turning in a stack of banked quests the moment phase 2 opens gains not
 
 ## 3. XP and rates
 
+Four decisions: **XP 2×, reputation 10×, loot 3×, +20 talent points at the phase-1 cap.** They are
+phase-invariant. Each subsection below says who owns the number, what it multiplies, and — the part
+that matters most for loot — what it does *not* touch.
+
+Every key on this page was read out of the actual `worldserver.conf.dist` on branch `Playerbot` of
+`mod-playerbots/azerothcore-wotlk`, and cross-checked against its registration in
+`src/server/game/World/WorldConfig.cpp`. A key that does not exist is silently ignored, so the
+registration is the check that matters: if it is in `WorldConfig.cpp`, some code reads it.
+
+### XP — `Rate.XP.*` = 2
+
 ```ini
 # worldserver.conf
-Rate.XP.Kill     = 1.5
-Rate.XP.Quest    = 1.5
-Rate.XP.Quest.DF = 1.5   # dungeon-finder quest XP
-Rate.XP.Explore  = 1.5
-Rate.XP.Pet      = 1.5
+Rate.XP.Kill     = 2
+Rate.XP.Quest    = 2
+Rate.XP.Quest.DF = 2   # dungeon-finder quest XP
+Rate.XP.Explore  = 2
+Rate.XP.Pet      = 2
 
 Rate.Pet.LevelXP = 0.05  # leave at the default; see below
 ```
@@ -617,9 +769,13 @@ granted. Upstream:
 > experience is required. Default: 0.05
 
 So the default already makes pets level ~20× faster than the raw curve, and *raising* it would slow
-them down. Leave it alone; `Rate.XP.Pet = 1.5` is the knob on the granting side.
+them down. Leave it alone; `Rate.XP.Pet = 2` is the knob on the granting side.
 
-### The gotcha: AutoBalance silently eats your 1.5×
+Not set, deliberately: the six `Rate.XP.BattlegroundKill*` keys and `Rate.XP.BattlegroundBonus`.
+They exist, they default to `1`, and nobody on a three-person realm is doing battlegrounds. Same
+for `Rate.Honor`.
+
+### The gotcha: AutoBalance silently eats your 2×
 
 `AutoBalance.RewardScaling.XP` defaults to `1` (on) with `Method = "dynamic"`, and dynamic means:
 
@@ -628,17 +784,18 @@ them down. Leave it alone; `Rate.XP.Pet = 1.5` is the knob on the granting side.
 > […] The XP and money is evenly split amongst all players in the instance.
 
 So in a 3-player 5-man at the default curve (multiplier `0.6843`, derived in §4), XP per mob is
-multiplied by ~0.68. Against your 1.5× that nets **1.5 × 0.6843 ≈ 1.03** — you are running at
-effectively 1× inside dungeons while questing outdoors pays 1.5×. Dungeon leveling silently becomes
-the *worst* way to level, which is the opposite of what a 3-person server wants.
+multiplied by ~0.68. Against your 2× that nets **2 × 0.6843 ≈ 1.37** — you are running at
+effectively 1.37× inside dungeons while questing outdoors pays 2×. Dungeon leveling silently
+becomes the *worst* way to level, which is the opposite of what a 3-person server wants, and the
+decision is explicitly that **nothing may reduce dungeon XP**.
 
 Three ways out:
 
 | Option | Config | Effect | Tradeoff |
 |---|---|---|---|
-| **Turn reward scaling off** (recommended) | `AutoBalance.RewardScaling.XP = 0` | full XP from weakened mobs; 1.5× applies cleanly | dungeon grinding becomes clearly the fastest leveling path — usually desirable here, but it will outpace questing |
-| Compensate with the modifier | keep `= 1`, set `AutoBalance.RewardScaling.XP.Modifier = 1.5` | roughly restores parity | approximate: the modifier is flat, the scaling multiplier moves with group size, so parity only holds at one group size |
-| Leave it alone | defaults | dungeons pay ~1× | fine if you want questing to be the main path |
+| **Turn reward scaling off** (the decision) | `AutoBalance.RewardScaling.XP = 0` | full XP from weakened mobs; 2× applies cleanly | dungeon grinding becomes clearly the fastest leveling path — desirable here, but it will outpace questing |
+| Compensate with the modifier | keep `= 1`, set `AutoBalance.RewardScaling.XP.Modifier = 1.46` | roughly restores parity | approximate: the modifier is flat, the scaling multiplier moves with group size, so parity only holds at one group size. Rejected — it is a second system pricing XP |
+| Leave it alone | defaults | dungeons pay ~1.37× | contradicts the decision |
 
 Take the first. Do the same for money if you care:
 `AutoBalance.RewardScaling.Money = 0`.
@@ -650,8 +807,8 @@ combined with reward scaling it's the second reason dungeon XP feels bad by defa
 ### The second gotcha: mod-solo-lfg pins dungeon XP to 0.2×
 
 **`AutoBalance.RewardScaling.XP = 0` does not finish the job.** [mod-solo-lfg](modules.md), which
-[§2](#rdf-is-broken-at-levels-5960-and-6970-without-a-module) tells you to install because RDF will
-not queue three people, ships these defaults in `SoloLfg.conf.dist`:
+[§2](#rdf-at-levels-5960-and-6970--the-module-is-still-wanted-for-a-different-reason) tells you to
+install because RDF will not queue three people, ships these defaults in `SoloLfg.conf.dist`:
 
 ```ini
 SoloLFG.FixedXP     = 1     # "Set the XP rate in dungeons to FixedXPRate"
@@ -687,9 +844,11 @@ Four things make this worse than it looks:
   `1.166f` (`Formulas.h`, `xp_in_group_rate`). Three equal-level friends would normally each take
   `1.166 / 3` ≈ **0.389**; forced to `0.2` they take about **half** of that. The smaller the group,
   the bigger the loss — the opposite of what a module named "solo LFG" implies.
-- **It stacks under your 1.5×.** `_RewardXP` does `xp = uint32(xp * rate)` and only then calls
+- **It stacks under your 2×.** `_RewardXP` does `xp = uint32(xp * rate)` and only then calls
   `GiveXP`, which applies `Rate.XP.Kill`. Net for a grouped player in any instance:
-  `1.5 × 0.2 = 0.3×` base kill XP. With `RewardScaling.XP` also left at `1` it is `0.3 × 0.68 ≈ 0.2×`.
+  `2 × 0.2 = 0.4×` base kill XP. With `RewardScaling.XP` also left at `1` it is
+  `0.4 × 0.6843 ≈ 0.27×`. Raising XP to 2× makes this *worse* in absolute terms, not better —
+  you'd be paying 0.27× while believing you'd paid for 2×.
 - **It only bites when you are in a group.** The `rate` argument is consumed inside
   `if (_group)`, so an ungrouped player is untouched. So the tax lands precisely on the three
   friends running a dungeon together, and never while testing solo. That is why this is easy to
@@ -700,28 +859,40 @@ Set `SoloLFG.FixedXP = 0`. The module's queue-with-fewer-than-five behaviour is 
 
 ### Who owns dungeon XP
 
-The brief is that **XP is 1.5× at full rate regardless of group size**. Three separate systems will
-quietly modify dungeon XP, and each of them defaults to *on* — plus a fourth key,
-`AutoBalance.LevelScaling`, which reaches XP indirectly by rewriting creature levels. Exactly one
-may own the number, and that one is `Rate.XP.*`. Every other multiplier must be neutral:
+The decision, precisely: **dungeon XP is exactly what three players would earn in vanilla, times
+two.** Nothing may reduce it. The vanilla three-player number *includes* the ordinary group split —
+that split is the baseline, not a tax — and the 2× goes on top of it.
+
+Three separate systems will quietly modify dungeon XP and each of them defaults to *on*, plus a
+fourth key, `AutoBalance.LevelScaling`, which reaches XP indirectly by rewriting creature levels.
+Exactly one may own the number, and that one is `Rate.XP.*`. Every other multiplier must be
+neutral:
 
 | System | Key | Default | **Set to** | Why |
 |---|---|---|---|---|
-| Core rates — **the owner** | `Rate.XP.Kill` / `.Quest` / `.Quest.DF` / `.Explore` / `.Pet` | `1` | `1.5` | this is the decision; nothing else gets a vote |
+| Core rates — **the owner** | `Rate.XP.Kill` / `.Quest` / `.Quest.DF` / `.Explore` / `.Pet` | `1` | `2` | this is the decision; nothing else gets a vote |
 | AutoBalance | `AutoBalance.RewardScaling.XP` | `1` | `0` | dynamic scaling shrinks XP with the group; ~`0.68×` at 3-of-5 |
 | AutoBalance | `AutoBalance.RewardScaling.Money` | `1` | `0` | same, for gold |
-| AutoBalance | `AutoBalance.LevelScaling` | `1` | `1` — **leave on** | the indirect path: it rewrites creature *levels*, and `BaseGain` prices a kill off the live level. But only outside the `[you − 5, you + 3]` skip window, so it never fires at level-appropriate content, and where it does fire it usually raises XP — worked in [§4](#4-autobalance-tuning), *Does LevelScaling eat your 1.5×?* |
+| AutoBalance | `AutoBalance.LevelScaling` | `1` | `1` — **leave on** | the indirect path: it rewrites creature *levels*, and `BaseGain` prices a kill off the live level. But only outside the `[you − 5, you + 3]` skip window, so it never fires at level-appropriate content, and where it does fire it usually raises XP — worked in [§4](#4-autobalance-tuning), *Does LevelScaling eat your 2×?* |
 | mod-solo-lfg | `SoloLFG.FixedXP` | `1` | `0` | pins every instance kill to `FixedXPRate` |
 | mod-solo-lfg | `SoloLFG.FixedXPRate` | `0.2` | *(irrelevant once `FixedXP = 0`)* | leave it; do not "fix" it by setting it to 1.0 |
 | mod-individual-xp | `IndividualXp.DefaultXPRate` | `1` | `1` | per-character, opt-in, multiplies on top — see below |
 
 With that set, three friends in a dungeon get the ordinary group split (≈`0.389` each at equal
-levels) times `1.5`, and mobs are still weakened by the AutoBalance curve for free. That is the
-intended shape: **AutoBalance makes the content survivable, it does not get to price it.**
+levels) times `2` — call it `0.778` of a solo kill each, per mob, against `0.389` on a vanilla
+realm — and mobs are still weakened by the AutoBalance curve for free. That is the intended shape:
+**AutoBalance makes the content survivable, it does not get to price it.**
 
-The normal group split is *not* something to remove. It is Blizzlike, it is what
-`Rate.XP.Kill = 1.5` is compensating for, and the only way to opt out of it is per character via
+The normal group split is *not* something to remove. It is Blizzlike, it is the "what 3 players
+would earn" the decision is written against, and the only way to opt out of it is per character via
 `mod-individual-xp`.
+
+**Nothing else in the build touches XP.** The other sixteen pinned modules in
+[modules.md](modules.md) §6.1 were checked file by file — every `.cpp`, `.h` and `.conf.dist` at
+the pinned SHA, grepped for `GiveXP`, `OnPlayerGiveXP`, `OnPlayerRewardKillRewarder`, `RATE_XP`,
+`Rate.XP` and `XPRate`. Zero hits. `mod-weekend-xp` would be a fourth multiplier and is
+deliberately **not** in the build ([modules.md](modules.md) §3). Re-run that grep whenever a module
+is added; it is the only way to catch this class of problem, because —
 
 If dungeon XP ever feels wrong, check those keys before touching anything else. The login banners
 these modules print say only that they are installed — none of them mentions XP — so there is no
@@ -758,12 +929,188 @@ Two things worth knowing, both read out of `src/individual_xp.cpp`:
   ```cpp
   amount = static_cast<uint32>(std::round(static_cast<float>(amount) * data->XPRate));
   ```
-  So `.xp set 2` on your 1.5× server is an effective 3.0×. `DefaultXPRate = 1` therefore means
-  "just the server rate", which is what you want.
+  So `.xp set 2` on your 2× server is an effective **4.0×**, and `MaxXPRate = 10` is a ceiling of
+  20× in practice. `DefaultXPRate = 1` therefore means "just the server rate", which is what you
+  want.
 - **It's per character, not per account** — stored against `CharacterGUID` in the `individualxp`
   table. A latecomer needs to run `.xp set` on each character.
 
 `.xp disable` is also the clean way to let someone park an alt at a level to play with a friend.
+
+### Reputation — `Rate.Reputation.Gain` = 10
+
+```ini
+# worldserver.conf
+Rate.Reputation.Gain = 10
+
+# LEFT AT 1 ON PURPOSE. These multiply on top of Gain — setting them to 10 as well
+# would be 100× on the content they cover.
+Rate.Reputation.LowLevel.Kill  = 1
+Rate.Reputation.LowLevel.Quest = 1
+```
+
+**One key owns it.** `Rate.Reputation.Gain` is applied in `ReputationMgr::SetOneFactionReputation`
+to every incremental gain, whatever its source:
+
+```cpp
+if (incremental)
+{
+    stand *= sWorld->getRate(RATE_REPUTATION_GAIN);
+}
+```
+
+That is the whole mechanism — kills, quests, spell-granted rep, all of it, once.
+
+**Why the LowLevel keys stay at 1.** They are applied earlier, in
+`Player::CalculateReputationGain`, and the result then goes through `SetOneFactionReputation`, so
+they genuinely compose multiplicatively with `Gain`. `10 × 10 = 100×` is the trap the decision is
+avoiding. Two corrections to the obvious reading of their names, both from the same function:
+
+```cpp
+case REPUTATION_SOURCE_KILL:  rate = sWorld->getRate(RATE_REPUTATION_LOWLEVEL_KILL);  break;
+...
+if (rate != 1.0f && creatureOrQuestLevel <= Acore::XP::GetGrayLevel(GetLevel()))
+    percent *= rate;
+```
+
+- They only fire on content **at or below your grey level**. They are not a general low-level
+  bonus; they are specifically "rep from things too trivial to give XP".
+- The guard is `rate != 1.0f`, so at the default `1` the branch is skipped entirely. Leaving them
+  alone is genuinely a no-op, not a `× 1`.
+
+Also left alone: `Rate.Reputation.Gain.WSG` / `.AB` / `.AV`, which upstream documents as *"applied
+IN ADDITION to the global Rate.Reputation.Gain"* — battlegrounds, irrelevant here — and
+`Rate.Reputation.RecruitAFriendBonus` at its `0.1` default.
+
+Faction-specific overrides in the `reputation_reward_rate` world-DB table also multiply on top
+(`percent *= repRate`), and a row with rate `0` disables that faction's rep entirely. Nothing in
+the pinned module set writes to that table, but it is the one place a "why is this faction not
+moving at 10×" answer could hide.
+
+### Loot — 3×, and be honest about what that means
+
+```ini
+# worldserver.conf
+Rate.Drop.Item.Poor      = 3
+Rate.Drop.Item.Normal    = 3
+Rate.Drop.Item.Uncommon  = 3
+Rate.Drop.Item.Rare      = 3
+Rate.Drop.Item.Epic      = 3
+Rate.Drop.Item.Legendary = 3
+Rate.Drop.Item.Artifact  = 3
+Rate.Drop.Money          = 3
+
+# LEFT AT 1. These are a different mechanism — see below.
+Rate.Drop.Item.Referenced       = 1
+Rate.Drop.Item.ReferencedAmount = 1
+Rate.Drop.Item.GroupAmount      = 1
+```
+
+Those seven quality keys are the complete tier list — `Poor` through `Artifact`, matching
+`qualityToRate[]` in `LootMgr.cpp`, and the code guards with `pProto->Quality < ITEM_QUALITY_HEIRLOOM`,
+so heirlooms (quality 7) are excluded by design.
+
+**This multiplies a drop *chance*, and there are two large categories it cannot touch.** Say so
+out loud, because "3× loot" sounds like it means three times the loot and it does not.
+
+**1. Anything already at 100% is untouched.** `LootStoreItem::Roll` returns before the rate is even
+looked up:
+
+```cpp
+if (_chance >= 100.0f)
+    return true;
+
+if (reference)
+    return roll_chance_f(_chance * (rate ? sWorld->getRate(RATE_DROP_ITEM_REFERENCED) : 1.0f));
+
+ItemTemplate const* pProto = sObjectMgr->GetItemTemplate(itemid);
+float qualityModifier = 1.0f;
+if (pProto && pProto->Quality < ITEM_QUALITY_HEIRLOOM && rate)
+    qualityModifier = sWorld->getRate(qualityToRate[pProto->Quality]);
+
+return roll_chance_f(_chance * qualityModifier);
+```
+
+**2. Grouped loot ignores the quality rates entirely.** A loot *group* is a pick-one bucket, and
+`LootTemplate::LootGroup::Roll` walks it on the raw `item->chance` with no quality modifier
+anywhere in the function — it subtracts each chance from a single roll and returns the first entry
+that wins. Multiplying a pick-one bucket would be meaningless, so the code does not.
+
+Boss loot in AzerothCore is overwhelmingly grouped or referenced-then-grouped, and the guaranteed
+drops are guaranteed. **So this 3× is a trash-and-world-drop multiplier.** Concretely:
+
+| What | Effect of 3× | Why |
+|---|---|---|
+| Random greens off trash | ~3× as often (until a chance saturates at 100%) | non-grouped `Entries`, chance well under 100 |
+| World drop epics, rare-mob drops | ~3× as often | same path |
+| Quest items, guaranteed boss tokens | **nothing** | `_chance >= 100.0f` returns early |
+| The item a boss picks from its loot group | **nothing** | grouped, raw chance |
+| Gold from any source | 3× | `Rate.Drop.Money` is applied to the rolled amount, not a chance |
+
+If a real "bosses drop more" is ever wanted, the keys for it are `Rate.Drop.Item.GroupAmount` and
+`Rate.Drop.Item.ReferencedAmount` — upstream describes them as *"Makes many dungeon bosses (and
+others) drop additional loot"* and *"Makes many raid bosses (and others) drop additional loot"*.
+They multiply *counts*, not chances, and `GroupAmount` is read into a `uint32`, so it truncates and
+only integer values do anything. They are left at `1` deliberately: tripling every boss's loot pile
+is a much larger change than "3× loot" and it is not what was asked for. `Rate.Drop.Item.Referenced`
+is left at `1` for the same reason — it is a chance multiplier on whole reference *tables* firing,
+not a quality tier.
+
+Nothing in the pinned module set overrides this. `mod-aoe-loot`, `mod-quest-loot-party` and
+`mod-junk-to-gold` were grepped for `RATE_DROP` / `Rate.Drop` / `OnItemRoll`: no hits. The one
+script hook that could intercept it, `sScriptMgr->OnItemRoll`, is unused by anything installed.
+
+### Talents — `Rate.Talent` = 1.4
+
+**+20 talent points at the level-60 cap: 51 becomes 71.** One key, and it multiplies the *total*,
+so it scales with the cap rather than staying a fixed bonus.
+
+```ini
+# worldserver.conf
+Rate.Talent = 1.4
+```
+
+`Player::CalculateTalentsPoints` is the whole calculation:
+
+```cpp
+uint32 base_talent = GetLevel() < 10 ? 0 : GetLevel() - 9;
+...
+talentPointsForLevel += m_extraBonusTalentCount;
+sScriptMgr->OnPlayerCalculateTalentsPoints(this, talentPointsForLevel);
+return uint32(talentPointsForLevel * sWorld->getRate(RATE_TALENT));
+```
+
+**The rounding is a C-style cast to `uint32`, which truncates toward zero — it does not round.**
+That matters: `71.4` and `71.9` both give 71. Worked at each cap:
+
+| Level | Base (`level − 9`) | `× 1.4` | **Points** | Gain |
+|---|---|---|---|---|
+| 60 | 51 | 71.4 | **71** | +20 |
+| 70 | 61 | 85.4 | **85** | +24 |
+| 80 | 71 | 99.4 | **99** | +28 |
+
+All three land comfortably clear of a boundary, so float imprecision in `1.4f` (which is really
+1.39999997…) cannot flip them: the products are 71.3999…, 85.3999… and 99.3999….
+
+Notes on the edges:
+
+- **It applies below the cap too**, at every level from 10 up: a level-20 has `11 × 1.4 = 15`
+  points instead of 11. The bonus is proportional throughout levelling, not a lump at cap.
+- **It is `Reloadable::Yes`**, with a validator of `>= 0`. So unlike `MaxPlayerLevel` you can
+  `.reload config` it — though characters only pick the new total up at their next
+  `InitTalentForLevel`.
+- **Lowering it later is destructive.** Points already spent stay spent while the budget shrinks;
+  expect to hand out `.reset talents`. Same applies to any backwards cap move —
+  [§1](#going-backwards).
+- **`Rate.Talent.Pet` is a separate key** and stays at `1`. Hunter pet talents are not part of this
+  decision.
+- **Bots get the same budget**, since they run the same `CalculateTalentsPoints`. This is another
+  reason not to set `AiPlayerbot.LimitTalentsExpansion = 1` — a bot handed 71 points and clamped to
+  6 talent rows has nowhere to put them.
+- **Client side: 71 points spend fine.** The deepest single tree costs 51 points to bottom out, so
+  71 buys a full tree plus a 20-point secondary — which is roughly the point of the decision. *(How
+  the 3.3.5 talent frame renders a third-tree overflow at 99 points in phase 3: worth a look on the
+  night, not worth blocking on.)*
 
 ---
 
@@ -1010,7 +1357,7 @@ setting that makes the whole back catalogue playable — every dungeon is level-
 you feel like running it, which matters enormously when your dungeon pool is capped to one expansion
 at a time.
 
-#### Does LevelScaling eat your 1.5×?
+#### Does LevelScaling eat your 2×?
 
 Short answer: **no, not at level-appropriate content, and it does not need a compensating key.**
 Leave it on. The long answer matters because this is a genuinely different path to reduced XP from
@@ -1190,9 +1537,14 @@ AiPlayerbot.RandomBotMaxLevelChance = 0.4   # default 0.1; bias toward cap so th
 AiPlayerbot.SyncLevelWithPlayers = 0        # see note below
 
 # ── geography ────────────────────────────────────────────────────────────────
-AiPlayerbot.RandomBotMaps = 0,1             # phase 1; add 530, then 571
-AiPlayerbot.DisableDeathKnightLogin = 1     # phase 1 and 2
-AiPlayerbot.LimitTalentsExpansion   = 0     # keep full WotLK trees, per the brief
+AiPlayerbot.RandomBotMaps = 0,1             # phase 1; add 530, then 571. Outland is
+                                            # OPEN in phase 1 — this is about where
+                                            # level-capped bots have any business,
+                                            # not about what is reachable
+AiPlayerbot.DisableDeathKnightLogin = 0     # upstream default; no longer a phase key.
+                                            # DK bots self-clamp to [55, cap] — §2
+AiPlayerbot.LimitTalentsExpansion   = 0     # keep full WotLK trees, per the brief,
+                                            # and they have 71 points to spend — §3
 
 # ── things to switch off on a 3-person realm ─────────────────────────────────
 AiPlayerbot.RandomBotJoinBG     = 0   # nobody is doing BGs; this burns CPU on
@@ -1251,33 +1603,41 @@ accounts    = ceil(MaxRandomBots / charsPerAccount) + AddClassAccountPoolSize
 characters  = accounts × charsPerAccount
 ```
 
-`charsPerAccount` is 10 (one per class) — or **9 when Death Knights are unavailable**, which in
-phase 1 they are twice over (`Expansion = 0` and `DisableDeathKnightLogin = 1`). Skewing
-`RandomBotAllianceRatio`/`RandomBotHordeRatio` away from 50/50 reduces it further. So for the config
-above, in phase 1:
+`charsPerAccount` comes from `RandomPlayerbotFactory::CalculateAvailableCharsPerAccount()`:
+
+```cpp
+bool noDK = sPlayerbotAIConfig.disableDeathKnightLogin || sWorld->getIntConfig(CONFIG_EXPANSION) != EXPANSION_WRATH_OF_THE_LICH_KING;
+uint32 availableChars = noDK ? 9 : 10;
+```
+
+**It is 10 here, in every phase** — one per class — because `Expansion = 2` and
+`DisableDeathKnightLogin = 0` both hold from phase 1. (An earlier draft of this page had it at 9 in
+phases 1 and 2; that arithmetic is stale.) Skewing
+`RandomBotAllianceRatio`/`RandomBotHordeRatio` away from 50/50 reduces it. So for the config
+above, on a fresh database:
 
 | | accounts | characters |
 |---|---|---|
-| random bots (`MaxRandomBots = 30`, ÷9) | `ceil(30/9)` = **4** | 36 |
-| addclass pool (`AddClassAccountPoolSize = 10`) | **10** | 90 |
-| **total built on first boot** | **14** | **126** |
+| random bots (`MaxRandomBots = 30`, ÷10) | `ceil(30/10)` = **3** | 30 |
+| addclass pool (`AddClassAccountPoolSize = 10`) | **10** | 100 |
+| **total built on first boot** | **13** | **130** |
 
 Note which term dominates: the addclass pool, not the bot count. At the upstream defaults (500 bots,
 pool 50) it would be ~100 accounts and about a thousand characters — which is the real reason first
 boot has a reputation. Dropping the pool from 50 to 10 is most of the saving, and 10 addclass
-accounts is still 90 characters to pull a tank or healer from.
+accounts is still 100 characters to pull a tank, healer or Death Knight from.
 
 What it prints, on the `playerbots` logger, in this order:
 
 ```
 Creating random bot accounts...
-Waiting for 14 accounts loading into database (N queries)...
->> 14 Accounts loaded into database in NNNN ms
+Waiting for 13 accounts loading into database (N queries)...
+>> 13 Accounts loaded into database in NNNN ms
 Creating random bot characters...
 Creating cache for names per gender and race...
-Waiting for 126 characters loading into database (N queries)...
->> 126 Characters loaded into database in NNNN ms
->> 14 random bot accounts with 126 characters available     <- server.loading logger; this is "done"
+Waiting for 130 characters loading into database (N queries)...
+>> 130 Characters loaded into database in NNNN ms
+>> 13 random bot accounts with 130 characters available     <- server.loading logger; this is "done"
 ```
 
 Both `Waiting for …` loops just poll the async DB write queue once a second and print nothing in
@@ -1285,7 +1645,7 @@ between, so a long gap after either line is normal, not a stall. The work is MyS
 not CPU — if it is slow, that is a database tuning problem ([hosting.md](hosting.md)), and the module
 times itself, so the `in NNNN ms` figures tell you exactly where it went. *(Wall-clock on the target
 box: measure on the night — the module hands you the number. Minutes rather than seconds is the
-right expectation for 126 characters on a small VPS.)*
+right expectation for 130 characters on a small VPS.)*
 
 Two things that make this a one-time cost:
 
@@ -1306,6 +1666,10 @@ while server uptime is under `MaxRandomBots × 0.51` seconds (≈15 s at 30 bots
 *uptime*, so on a first boot where character creation ran for minutes it will already have expired;
 it is really a second-boot optimisation. **The signal to watch is `Random Bots Stats: N online`.**
 When N settles between `MinRandomBots` and `MaxRandomBots`, the roster is up.
+
+Death Knight bots are the one exception to "created at level 1": `Randomize()` sends any DK below
+56 straight to `RandomizeFirst()`, which floors both ends of their level window at
+`StartHeroicPlayerLevel`. So they arrive at 55+ and never sit at level 1 for long.
 
 Bots are created at level 1 and get their level, gear and talents on their *first randomize*, which
 happens after they log in — each bot gets one manager action per cycle, so this lands within the
@@ -1348,11 +1712,11 @@ The module wiki maintains the canonical list on its
 [Playerbot Addons and Sub-Modules](https://github.com/mod-playerbots/mod-playerbots/wiki/Playerbot-Addons-and-Sub%E2%80%90Modules)
 page — check it before installing, since these move.
 
-### Bot caveat at Expansion < 2 — resolved
+### Bot roster composition, settled at first boot
 
 Playerbots create characters through their own path rather than a real client session, so the
-question was whether they respect `Expansion` when rolling races. **They do**, on both counts, and
-it is confirmed in `RandomPlayerbotFactory::CreateRandomBot`:
+question was whether they respect `Expansion` when rolling races and classes. **They do** — from
+`RandomPlayerbotFactory::CreateRandomBot`:
 
 ```cpp
 // skip disabled with config races
@@ -1363,30 +1727,40 @@ if (IsValidRaceClassCombination(race, cls, sWorld->getIntConfig(CONFIG_EXPANSION
     raceOptions.push_back(race);
 ```
 
-Both the race mask and `CONFIG_EXPANSION` are honoured, and the class loop a few lines up applies
-`CONFIG_CHARACTER_CREATING_DISABLED_CLASSMASK` the same way. So `Expansion = 0` alone is enough to
-keep Blood Elf and Draenei bots from being created, and the
-`CharacterCreating.Disabled.RaceMask = 1536` in [§1](#phase-1--classic-cap-60) is genuine
-belt-and-braces rather than a required workaround.
+and `IsValidRaceClassCombination` is the same two-line expansion test the core uses:
 
-The one thing that does *not* follow from this: **bot characters are created once, on first boot**
-(see above), against whatever `Expansion` was in force then, and races are chosen at creation and
-never re-rolled. Raising `Expansion` at a phase flip does not go back and add Blood Elf or Draenei
-bots to the existing roster — the per-account loop is bounded by `cls < MAX_CLASSES - count`, so an
-account that already holds a full set is skipped or nearly so, and the classes it would add are the
-lowest class IDs, not the newly-unlocked one. Expect your phase-2 and phase-3 bot population to look
-like phase 1's, minus the Death Knights you never got. Rebuilding with
-`AiPlayerbot.DeleteRandomBotAccounts` is the only way to change that, and it costs you every bot's
-level and gear. Worth a sanity check after each flip, from `/srv/wow/wowserver/deploy`:
+```cpp
+if (expansion < EXPANSION_THE_BURNING_CRUSADE && (race == RACE_BLOODELF || race == RACE_DRAENEI))
+    return false;
+if (expansion < EXPANSION_WRATH_OF_THE_LICH_KING && cls == CLASS_DEATH_KNIGHT)
+    return false;
+```
+
+**At `Expansion = 2` all three tests pass, so the first-boot roster rolls Blood Elves, Draenei and
+Death Knights alongside everything else.** The class loop a few lines up applies
+`CONFIG_CHARACTER_CREATING_DISABLED_CLASSMASK` the same way, and both masks are `0`.
+
+This used to be a caveat and is now the reason the decision is cheap. **Bot characters are created
+once, on first boot**, against whatever `Expansion` was in force then, and races are chosen at
+creation and never re-rolled. Under the old strict design that was a permanent defect: a roster
+built at `Expansion = 0` would still have no Blood Elves in phase 3, because the per-account loop
+is bounded by `cls < MAX_CLASSES - count` and an account already holding a full set is skipped —
+and the only fix was `AiPlayerbot.DeleteRandomBotAccounts`, which costs every bot's level and gear.
+
+With `Expansion = 2` from the first boot there is nothing to fix. The roster is built complete and
+stays correct across both flips. Still worth eyeballing once, after first boot rather than after
+each flip, from `/srv/wow/wowserver/deploy`:
 
 ```bash
 docker compose exec -T mysql \
   mysql --defaults-extra-file=/etc/mysql/backup.cnf acore_characters \
-  -e "SELECT race, COUNT(*) FROM characters GROUP BY race;"
+  -e "SELECT race, class, COUNT(*) FROM characters GROUP BY race, class;"
 ```
 
-*(Whether a partially populated account gets topped up at all, and with what, is fiddly enough that
-it is worth just looking at the counts after the flip rather than predicting it.)*
+Expect races 10 (Blood Elf) and 11 (Draenei) present, and class 6 (Death Knight) present. If any of
+those three is missing, the server booted once with a lower `Expansion` and the roster is stuck
+that way — that is the one scenario where `DeleteRandomBotAccounts` is the right answer, and it is
+cheapest on day one.
 
 ---
 
@@ -1467,16 +1841,21 @@ Others:
 
 | Don't | Why |
 |---|---|
-| `MaxPlayerLevel < 55` | known AzerothCore crash |
-| Flip `Expansion` without `UPDATE account SET expansion` | existing accounts stay on the old expansion silently — §1 |
-| Ship phase 1 or 2 without `mod-rdf-expansion` | RDF is dead at levels 59–60 and 69–70 — §2 |
-| `AiPlayerbot.LimitTalentsExpansion = 1` | clamps bot talent trees below the players' — contradicts "full WotLK trees throughout" |
-| Enable Death Knights in phase 1 | DK starts at 55 against a cap of 60 |
+| `MaxPlayerLevel < 55` | known AzerothCore crash — and `StartHeroicPlayerLevel = 55` fails its `<= MaxPlayerLevel` validator below it |
+| **Move `Expansion` at all** | it is `2` in every phase. Lowering it clamps every session to the lower value while `account.expansion` stays high and stale, and you cannot repair an account from in-game while the config is low — [§1](#going-backwards) |
+| **Set `CharacterCreating.Disabled.RaceMask` / `.ClassMask`** | both stay at their upstream `0`. `1536` and `32` appear in older drafts of this page and would silently re-close Blood Elf, Draenei and Death Knight — [§1](#everything-that-moves-in-one-table) |
+| **Run a per-phase `UPDATE account SET expansion`** | there is no per-phase account SQL any more. `UPDATE account SET expansion = 0` would lock every account, bots included, out of two thirds of the game — [§1](#accountexpansion--the-one-time-setup-step) |
+| Boot the realm once with `Expansion` below 2 | every account and every bot character created on that boot is stamped low and stuck; the bot roster in particular can only be fixed by wiping it — [§5](#bot-roster-composition-settled-at-first-boot) |
+| Ship phase 1 or 2 without `mod-rdf-expansion` | RDF still works, but it hands a level-59 an Outland dungeon — §2 |
+| `AiPlayerbot.LimitTalentsExpansion = 1` | clamps bot talent trees below the players' — contradicts "full WotLK trees throughout", and a bot with 71 points and 6 rows has nowhere to put them |
+| Set `Rate.Reputation.LowLevel.Kill` / `.LowLevel.Quest` to 10 | they multiply on top of `Rate.Reputation.Gain` — that is 100× on grey-level content, not 10× — [§3](#reputation--ratereputationgain--10) |
+| Set `Rate.Drop.Item.GroupAmount` / `.ReferencedAmount` to 3 | those multiply loot *counts*, not chances. Tripling every boss's loot pile is a far bigger change than "3× loot" — [§3](#loot--3-and-be-honest-about-what-that-means) |
+| Lower `Rate.Talent` after people have spent points | the budget shrinks, the spent points don't — everyone needs `.reset talents` — [§3](#talents--ratetalent--14) |
 | Tune `StatModifier.*` before `InflectionPoint` | a second multiplier on top of the curve; makes the curve impossible to reason about |
 | `AutoBalance.LevelScaling.Method = "fixed"` | flattens trash and bosses to one level; `dynamic` is strictly better here |
-| Stack `mod-individual-xp` rates carelessly | it multiplies *on top of* `Rate.XP.*` — `.xp set 2` on a 1.5× server is 3× |
+| Stack `mod-individual-xp` rates carelessly | it multiplies *on top of* `Rate.XP.*` — `.xp set 2` on a 2× server is 4× |
 | Assume NPCBots would work instead | they don't count toward AutoBalance's player count — [../README.md](../README.md) |
-| Install `mod-solo-lfg` and leave `SoloLFG.FixedXP = 1` | its default pins **every instance and raid kill** to `FixedXPRate = 0.2`, replacing the group split, under your 1.5× — net `0.3×`. `RewardScaling.XP = 0` does not save you. Set `SoloLFG.FixedXP = 0` — [§3](#who-owns-dungeon-xp) |
+| Install `mod-solo-lfg` and leave `SoloLFG.FixedXP = 1` | its default pins **every instance and raid kill** to `FixedXPRate = 0.2`, replacing the group split, under your 2× — net `0.4×`. `RewardScaling.XP = 0` does not save you. Set `SoloLFG.FixedXP = 0` — [§3](#who-owns-dungeon-xp) |
 | Let more than one system scale dungeon XP | `Rate.XP.*` owns it. `AutoBalance.RewardScaling.XP` and `SoloLFG.FixedXP` both default to *on* and both silently reprice it; `mod-individual-xp` multiplies on top whenever someone has set a rate — [§3](#who-owns-dungeon-xp) |
 | Lower `MaxPlayerLevel` below a live character's level | no de-levelling; the character is frozen *and* gets extrapolated stats from `BuildPlayerLevelInfo` instead of the real table — [§1](#going-backwards) |
 | Expect `.reload config` to flip a phase | `MaxPlayerLevel` and `Expansion` are `Reloadable::No`; the console says so and the flip half-applies — [§1](#everything-that-moves-in-one-table) |

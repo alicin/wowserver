@@ -1,0 +1,76 @@
+-- deploy/mysql-init/01-databases.sql.template   (committed)
+--   -> deploy/mysql-init/01-databases.sql       (generated, gitignored)
+--
+-- FOUR databases. mod-playerbots adds acore_playerbots on top of AzerothCore's
+-- standard three, with its own connection key (PlayerbotsDatabaseInfo, which lives
+-- in playerbots.conf and NOT worldserver.conf) and its own update switch.
+-- docs/bring-up.md 2.
+--
+-- Why not AzerothCore's own data/sql/create/create_mysql.sql — two independent reasons:
+--   1. It has no acore_playerbots. The module ships table definitions under
+--      data/sql/playerbots/base/ but no schema-creation script.
+--   2. It grants to 'acore'@'localhost'. In Docker the servers connect from another
+--      container's IP, so the grant has to be on 'acore'@'%'.
+--
+-- Creating all four up front also means DBUpdater<T>::Create() never has to run, which
+-- removes both the dependency on the acore user holding CREATE and the interactive
+-- "Do you want to create it? [yes (default) / no]" prompt that hangs a tty-attached
+-- first boot forever (bring-up.md 2.3 — AC_DISABLE_INTERACTIVE=1 in the compose file
+-- is the belt to this file's braces).
+--
+--
+-- ==== THE SUBSTITUTION STEP. Do not skip it. ====
+--
+-- MySQL's init directory does NOT expand ${...}. docker-entrypoint.sh pipes each *.sql
+-- file straight into the mysql client, so an unsubstituted copy would set the acore
+-- account's password to the placeholder text below, verbatim. Generate the real file
+-- before the first `up`: the envsubst one-liner and its two sanity checks are
+-- docs/bring-up.md 6, steps 1 and 3.
+--
+-- That one-liner is deliberately NOT reproduced here. Its check greps this file for the
+-- placeholder's variable name and expects zero hits; writing the command into the
+-- template would plant the very token it looks for and the check would cry wolf on
+-- every run.
+--
+-- Three things about it that are easy to get wrong:
+--   * envsubst is /usr/bin/envsubst, from `gettext-base` on Debian/Ubuntu. A minimal
+--     install does not have it, and bootstrap.sh does not install it.
+--   * Its SHELL-FORMAT argument is not decoration. Given none, envsubst substitutes
+--     EVERY $VAR reference in the input; given one, only the variables named in it.
+--     Single-quote it so the shell leaves it alone.
+--   * No `umask 077` on this one, unlike deploy/.env and deploy/mysql-backup.cnf. The
+--     MySQL entrypoint re-execs itself as the unprivileged `mysql` user (`exec gosu
+--     mysql`) before it reads /docker-entrypoint-initdb.d, so a root-owned 0600 file is
+--     one it cannot read.
+--
+-- The .template suffix is what keeps THIS file inert while it sits in the mounted
+-- directory next to the generated one. docker_process_init_files runs *.sh, *.sql,
+-- *.sql.bz2, *.sql.gz, *.sql.xz and *.sql.zst; for anything else it logs
+--     ignoring /docker-entrypoint-initdb.d/01-databases.sql.template
+-- and moves on. (Read out of /usr/local/bin/docker-entrypoint.sh in mysql:8.4.11 and
+-- confirmed against a live init run, 2026-08-08.)
+--
+--
+-- ==== ONE SHOT ====
+--
+-- /docker-entrypoint-initdb.d runs exactly once, on an EMPTY MySQL data directory. Come
+-- up without the generated .sql and the acore user is never created, all four pools
+-- fail authentication, and adding the file afterwards changes nothing — the volume is
+-- no longer empty. Recovering means `docker compose down -v`, which destroys mysql-data
+-- and buys you the 15-30 minute world import a second time.
+
+
+CREATE DATABASE IF NOT EXISTS `acore_auth`       DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS `acore_characters` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS `acore_world`      DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS `acore_playerbots` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- '%' not 'localhost': the servers connect from another container.
+CREATE USER IF NOT EXISTS 'acore'@'%' IDENTIFIED BY '${ACORE_DB_PASSWORD}';
+
+GRANT ALL PRIVILEGES ON `acore_auth`       . * TO 'acore'@'%';
+GRANT ALL PRIVILEGES ON `acore_characters` . * TO 'acore'@'%';
+GRANT ALL PRIVILEGES ON `acore_world`      . * TO 'acore'@'%';
+GRANT ALL PRIVILEGES ON `acore_playerbots` . * TO 'acore'@'%';
+
+FLUSH PRIVILEGES;

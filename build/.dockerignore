@@ -1,0 +1,7 @@
+# Build context is ./build (docs/hosting.md 3.5). Only three files belong in it.
+# `build/cache/` is gitignored at the repo root for a local ccache directory -- if one exists
+# it must not be shipped to the daemon as build context, and it must not bust the cache key of
+# every layer by changing on each run.
+cache/
+*.log
+.DS_Store
