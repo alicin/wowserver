@@ -1,0 +1,85 @@
+[worldserver]
+
+########################################################################################
+# mod-dk-lowlevel
+#
+# TRUE level-1 Death Knights. This file MUST exist: modules/CMakeLists.txt builds the
+# compile-time CONFIG_FILE_LIST from `file(GLOB ${MODULE_CONFIG_PATH}/*.conf.dist)` with
+# the .dist stripped, so a module with no conf.dist never gets its .conf read at all.
+#
+# The values below are also the module's compiled-in defaults (dk_lowlevel.cpp
+# DkLowLevelConfig::Load). Keep the two in sync: on this deployment
+# deploy/docker-compose.yml bind-mounts conf/modules over /opt/ac/etc/modules, which
+# shadows the installed copy of this file entirely, so an operator who omits a key gets
+# the compiled default rather than what is written here.
+#
+# No inline comments anywhere in this file. The parser has no inline-comment handling --
+# `Key = 1  # note` reads the value as the whole string after the `=`.
+########################################################################################
+
+#
+#    DKLowLevel.Enable
+#        Description: Master switch. When 0 the module is inert: no spells are granted and
+#                     the Acherus talent fix does not apply.
+#
+#                     SHIP THIS AS 0. Turning it on before the world-DB half of the feature
+#                     is live (54 player_class_stats rows for class 6, the spell_dbc /
+#                     skilllineability_dbc / spell_ranks rows) grants spell IDs that do not
+#                     resolve. The intended order is in DESIGN.md 1.2: apply the SQL,
+#                     restart, verify, THEN flip this and `.reload config`.
+#        Default:     0 (disabled)
+#
+
+DKLowLevel.Enable = 0
+
+#
+#    DKLowLevel.FixAcherusTalents
+#        Description: Override Player::CalculateTalentsPoints for Death Knights standing on
+#                     map 609 (Ebon Hold) so they get the normal `level - 9` talent points
+#                     instead of the DK-specific `level - 55`.
+#
+#                     Without this, any Death Knight below level 56 who logs out in Acherus
+#                     has every spent talent point silently refunded to zero, with no gold
+#                     back, on every login -- InitTalentForLevel calls resetTalents(true)
+#                     when the used count exceeds the calculated count. That is unreachable
+#                     on a 55+-only realm and routine on this one, since Death Gate puts a
+#                     level-30 Death Knight in Acherus in one cast.
+#
+#                     Only meaningful while DKLowLevel.Enable is 1.
+#        Default:     1 (enabled)
+#
+
+DKLowLevel.FixAcherusTalents = 1
+
+#
+#    DKLowLevel.DeathGateLevel
+#        Description: Level at which Death Gate (spell 50977) is granted. 0 disables the
+#                     grant entirely.
+#
+#                     Level 1 is the deliberate default and it is not only a convenience:
+#                     four places in the core (Player.cpp far-teleport veto,
+#                     BattleGroundHandler, Group, TC9GrpcHandler) gate on the player knowing
+#                     50977, and a Death Knight who reaches map 609 without it can be
+#                     stranded there. The spell's destination is on map 0, so it cannot drop
+#                     a low-level character anywhere dangerous.
+#        Default:     1
+#
+
+DKLowLevel.DeathGateLevel = 1
+
+#
+#    DKLowLevel.RuneforgingLevel
+#        Description: Level at which Runeforging (spell 53428) is granted. 0 disables the
+#                     grant entirely.
+#
+#                     Normally taught by Acherus quest 12619, which is unreachable under
+#                     this design. Learning 53428 is sufficient on its own -- Player::addSpell
+#                     special-cases the runeforging skill and sets it up, including the two
+#                     rune enchants.
+#        Default:     1
+#
+
+DKLowLevel.RuneforgingLevel = 1
+
+#
+

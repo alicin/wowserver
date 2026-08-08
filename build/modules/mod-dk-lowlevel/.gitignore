@@ -1,0 +1,22 @@
+# The repo-root .gitignore line 12 is a bare `data/`, which — having no leading slash — matches a
+# directory named `data` at ANY depth. It is there for the extracted client data at the repo root
+# (a few GB of maps/vmaps/dbc), but it also silently swallows this module's
+# data/sql/db-world/**.sql, which is a git-tracked artefact that MUST ship.
+#
+# The symptom if this file is missing is nasty and delayed: `docker build` sends the whole working
+# tree as context, so a LOCAL build picks the SQL up and the feature works — while CI, which
+# builds from a clean `git clone`, produces an image with no module SQL at all and a worldserver
+# that boots fine and grants nothing. `git status` never mentions the missing files.
+#
+# A nested .gitignore's patterns take precedence over the parent's for paths beneath it, so
+# re-including the directory here is enough (re-including only the *.sql files would not be —
+# git never descends into an excluded directory). Verified with `git check-ignore -v`.
+#
+# The tidier fix is to anchor the root pattern as `/data/`. Do that instead and delete this line.
+!/data/
+
+# Byte-compiled output of tools/*.py. build/.dockerignore excludes it from the image too; both are
+# needed, because the two files answer different questions (what git tracks vs. what busts the
+# Docker layer cache above the 30-minute compile).
+__pycache__/
+*.pyc

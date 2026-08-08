@@ -1,7 +1,18 @@
-# Build context is ./build (docs/hosting.md 3.5). Only three files belong in it.
+# Build context is ./build (docs/hosting.md 3.5). Three files -- Dockerfile, modules.txt,
+# entrypoint.sh -- plus modules/, which holds modules versioned in this repo rather than pinned in
+# modules.txt. Nothing here may exclude modules/ or any part of it: the Dockerfile COPYs it whole,
+# INCLUDING each module's data/sql/**, which is how its migrations reach DBUpdater at runtime.
 # `build/cache/` is gitignored at the repo root for a local ccache directory -- if one exists
 # it must not be shipped to the daemon as build context, and it must not bust the cache key of
 # every layer by changing on each run.
 cache/
 *.log
 .DS_Store
+
+# Byte-compiled Python from the module generators under modules/*/tools/. Excluded for the layer
+# cache, not for size: `COPY modules/ /src/modules/` sits directly above the compile, so any
+# change under build/modules/ invalidates it -- and running a generator rewrites .pyc timestamps
+# even when the .py is untouched. Left in, an unrelated `dkspells.py --help` would cost a full
+# AzerothCore rebuild.
+**/__pycache__/
+*.pyc

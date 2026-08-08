@@ -5,7 +5,9 @@
 #   plain `docker build` too.
 #
 # Build context is ./build (docs/hosting.md 3.5: `context: ./build`), so the only things in
-# it are this file, modules.txt and entrypoint.sh. Nothing else needs to be sent.
+# it are this file, modules.txt, entrypoint.sh and modules/ -- the last being local modules that
+# are versioned in this repo rather than pinned in modules.txt, which have to sit inside the
+# context to be COPYable at all. Nothing else needs to be sent.
 #
 # THE RULE THIS FILE EXISTS TO ENFORCE (docs/hosting.md 3.4): builder and runtime derive from
 # the SAME base tag. A binary linked against one glibc and copied into a different base fails
@@ -108,6 +110,33 @@ RUN set -e; while read -r repo ref sha; do \
       git -C "modules/$name" fetch --depth 1 origin "$sha"; \
       git -C "modules/$name" checkout --detach "$sha"; \
     done < /tmp/modules.txt
+
+# Local modules -- ones that live in THIS repo instead of being a modules.txt pin. Today that is
+# just build/modules/mod-dk-lowlevel (docs/modules.md; .work/notes/DESIGN.md A16).
+#
+# WHY THE MODULE LIVES UNDER build/ AT ALL: the build context is ./build, so a module at the repo
+# root would not be in the context and this COPY could not see it. build/.dockerignore excludes
+# only cache/, *.log and .DS_Store, and the workflow's `paths: ['build/**']` filter already
+# triggers a rebuild on any edit here.
+#
+# WHY AFTER THE CLONE LOOP, NOT BEFORE: COPY merges into an existing directory rather than
+# replacing it, so ordering does not destroy anything either way -- but if a local module ever
+# shares a name with a pinned one, the copy must be the one that wins. "The tree in this repo
+# beats whatever GitHub served" is the only defensible rule, and it is only true in this order.
+#
+# WHY HERE AND NOT EARLIER: this is the cheapest possible place. Everything above it -- the apt
+# layer and the `git fetch` of ~1 GB of core -- is expensive and unrelated to module source, so
+# editing a .cpp in build/modules/ must not invalidate any of it. Everything below it is the
+# compile, which has to re-run anyway. Moving this line above `COPY modules.txt` would re-clone
+# eighteen repos on every module-source edit; moving it above the core fetch would re-download the
+# core as well.
+#
+# Trailing slashes on both sides are deliberate: `modules/` means "the CONTENTS of build/modules",
+# so build/modules/mod-dk-lowlevel lands at /src/modules/mod-dk-lowlevel next to the clones, not at
+# /src/modules/modules/. Note this also carries the module's data/sql/**, which the runtime stage
+# copies on to /opt/ac/src/modules for DBUpdater -- so the module's migrations ship with no further
+# change here.
+COPY modules/ /src/modules/
 
 # -DTOOLS_BUILD=none, and THERE IS NO `TOOLS` VARIABLE. Get the spelling right, because cmake
 # will not tell you: conf/dist/config.cmake (included unconditionally by the top-level
