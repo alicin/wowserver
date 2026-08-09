@@ -44,94 +44,94 @@ struct DkGrant
 static constexpr DkGrant kDkProgression[] =
 {
     {  1, 48266 },   // Blood Presence -- stock spell, nothing to scale
-    {  1, 90000 },   // Icy Touch (Rank 1) -- 10-12 Frost damage
-    {  1, 90020 },   // Plague Strike (Rank 1) -- 5 bonus weapon damage
-    {  1, 90040 },   // Blood Strike (Rank 1) -- 11 bonus weapon damage
-    {  2, 90060 },   // Death Coil (Rank 1) -- 17 Shadow damage
+    {  1, 90000 },   // Icy Touch (Rank 1) -- 11-13 Frost damage
+    {  1, 90020 },   // Plague Strike (Rank 1) -- 6 bonus weapon damage
+    {  1, 90040 },   // Blood Strike (Rank 1) -- 12 bonus weapon damage
+    {  2, 90060 },   // Death Coil (Rank 1) -- 18 Shadow damage
     {  4, 49576 },   // Death Grip -- stock spell, nothing to scale
-    {  6, 90080 },   // Death Strike (Rank 1) -- 14 bonus weapon damage, 67 Effect_3 dummy (tooltip only)
-    {  7, 90001 },   // Icy Touch (Rank 2) -- 23-25 Frost damage
-    {  7, 90021 },   // Plague Strike (Rank 2) -- 19 bonus weapon damage
-    {  7, 90041 },   // Blood Strike (Rank 2) -- 39 bonus weapon damage
+    {  6, 90080 },   // Death Strike (Rank 1) -- 16 bonus weapon damage, 73 Effect_3 dummy (tooltip only)
+    {  7, 90001 },   // Icy Touch (Rank 2) -- 25-27 Frost damage
+    {  7, 90021 },   // Plague Strike (Rank 2) -- 20 bonus weapon damage
+    {  7, 90041 },   // Blood Strike (Rank 2) -- 42 bonus weapon damage
     {  8, 47528 },   // Mind Freeze -- stock spell, nothing to scale
-    {  8, 90061 },   // Death Coil (Rank 2) -- 34 Shadow damage
+    {  8, 90061 },   // Death Coil (Rank 2) -- 36 Shadow damage
     { 10, 50842 },   // Pestilence -- stock spell, nothing to scale
-    { 12, 90081 },   // Death Strike (Rank 2) -- 26 bonus weapon damage, 108 Effect_3 dummy (tooltip only)
-    { 12, 90120 },   // Blood Boil (Rank 1) -- 23-27 Shadow damage
-    { 13, 90002 },   // Icy Touch (Rank 3) -- 37-39 Frost damage
-    { 13, 90022 },   // Plague Strike (Rank 3) -- 32 bonus weapon damage
-    { 13, 90042 },   // Blood Strike (Rank 3) -- 66 bonus weapon damage
+    { 12, 90081 },   // Death Strike (Rank 2) -- 28 bonus weapon damage, 116 Effect_3 dummy (tooltip only)
+    { 12, 90120 },   // Blood Boil (Rank 1) -- 25-29 Shadow damage
+    { 13, 90002 },   // Icy Touch (Rank 3) -- 40-42 Frost damage
+    { 13, 90022 },   // Plague Strike (Rank 3) -- 34 bonus weapon damage
+    { 13, 90042 },   // Blood Strike (Rank 3) -- 71 bonus weapon damage
     { 14, 45524 },   // Chains of Ice -- stock spell, nothing to scale
-    { 14, 90062 },   // Death Coil (Rank 3) -- 51 Shadow damage
+    { 14, 90062 },   // Death Coil (Rank 3) -- 54 Shadow damage
     { 16, 56222 },   // Dark Command -- stock spell, nothing to scale
-    { 18, 90082 },   // Death Strike (Rank 3) -- 38 bonus weapon damage, 148 Effect_3 dummy (tooltip only)
-    { 18, 90121 },   // Blood Boil (Rank 2) -- 32-38 Shadow damage
-    { 18, 90160 },   // Horn of Winter (Rank 1) -- 27 Strength, 27 Agility
-    { 19, 90003 },   // Icy Touch (Rank 4) -- 50-53 Frost damage
-    { 19, 90023 },   // Plague Strike (Rank 4) -- 45 bonus weapon damage
-    { 19, 90043 },   // Blood Strike (Rank 4) -- 94 bonus weapon damage
+    { 18, 90082 },   // Death Strike (Rank 3) -- 40 bonus weapon damage, 158 Effect_3 dummy (tooltip only)
+    { 18, 90121 },   // Blood Boil (Rank 2) -- 34-40 Shadow damage
+    { 18, 90160 },   // Horn of Winter (Rank 1) -- 29 Strength, 29 Agility
+    { 19, 90003 },   // Icy Touch (Rank 4) -- 52-56 Frost damage
+    { 19, 90023 },   // Plague Strike (Rank 4) -- 48 bonus weapon damage
+    { 19, 90043 },   // Blood Strike (Rank 4) -- 100 bonus weapon damage
     { 20, 48263 },   // Frost Presence -- stock spell, nothing to scale
     { 20, 56815 },   // Rune Strike -- stock spell, nothing to scale
-    { 20, 90063 },   // Death Coil (Rank 4) -- 68 Shadow damage
+    { 20, 90063 },   // Death Coil (Rank 4) -- 72 Shadow damage
     { 22, 48792 },   // Icebound Fortitude -- stock spell, nothing to scale
     { 24, 48707 },   // Anti-Magic Shell -- stock spell, nothing to scale
-    { 24, 90083 },   // Death Strike (Rank 4) -- 50 bonus weapon damage, 189 Effect_3 dummy (tooltip only)
-    { 24, 90122 },   // Blood Boil (Rank 3) -- 40-48 Shadow damage
-    { 24, 90161 },   // Horn of Winter (Rank 2) -- 35 Strength, 35 Agility
-    { 25, 90004 },   // Icy Touch (Rank 5) -- 63-67 Frost damage
-    { 25, 90024 },   // Plague Strike (Rank 5) -- 58 bonus weapon damage
-    { 25, 90044 },   // Blood Strike (Rank 5) -- 122 bonus weapon damage
-    { 26, 90064 },   // Death Coil (Rank 5) -- 85 Shadow damage
-    { 26, 90140 },   // Death and Decay (Rank 1) -- 12 Shadow damage per second
+    { 24, 90083 },   // Death Strike (Rank 4) -- 52 bonus weapon damage, 199 Effect_3 dummy (tooltip only)
+    { 24, 90122 },   // Blood Boil (Rank 3) -- 43-51 Shadow damage
+    { 24, 90161 },   // Horn of Winter (Rank 2) -- 37 Strength, 37 Agility
+    { 25, 90004 },   // Icy Touch (Rank 5) -- 66-71 Frost damage
+    { 25, 90024 },   // Plague Strike (Rank 5) -- 62 bonus weapon damage
+    { 25, 90044 },   // Blood Strike (Rank 5) -- 128 bonus weapon damage
+    { 26, 90064 },   // Death Coil (Rank 5) -- 89 Shadow damage
+    { 26, 90140 },   // Death and Decay (Rank 1) -- 13 Shadow damage per second
     { 28, 46584 },   // Raise Dead -- stock spell, nothing to scale
     { 30, 3714 },   // Path of Frost -- stock spell, nothing to scale
-    { 30, 90084 },   // Death Strike (Rank 5) -- 61 bonus weapon damage, 230 Effect_3 dummy (tooltip only)
-    { 30, 90123 },   // Blood Boil (Rank 4) -- 49-58 Shadow damage
-    { 30, 90162 },   // Horn of Winter (Rank 3) -- 42 Strength, 42 Agility
-    { 31, 90005 },   // Icy Touch (Rank 6) -- 75-81 Frost damage
-    { 31, 90025 },   // Plague Strike (Rank 6) -- 72 bonus weapon damage
-    { 31, 90045 },   // Blood Strike (Rank 6) -- 149 bonus weapon damage
+    { 30, 90084 },   // Death Strike (Rank 5) -- 64 bonus weapon damage, 240 Effect_3 dummy (tooltip only)
+    { 30, 90123 },   // Blood Boil (Rank 4) -- 51-61 Shadow damage
+    { 30, 90162 },   // Horn of Winter (Rank 3) -- 44 Strength, 44 Agility
+    { 31, 90005 },   // Icy Touch (Rank 6) -- 78-84 Frost damage
+    { 31, 90025 },   // Plague Strike (Rank 6) -- 75 bonus weapon damage
+    { 31, 90045 },   // Blood Strike (Rank 6) -- 156 bonus weapon damage
     { 32, 45529 },   // Blood Tap -- stock spell, nothing to scale
-    { 32, 90065 },   // Death Coil (Rank 6) -- 102 Shadow damage
+    { 32, 90065 },   // Death Coil (Rank 6) -- 106 Shadow damage
     { 32, 90141 },   // Death and Decay (Rank 2) -- 15 Shadow damage per second
     { 34, 47476 },   // Strangulate -- stock spell, nothing to scale
     { 36, 48743 },   // Death Pact -- stock spell, nothing to scale
-    { 36, 90085 },   // Death Strike (Rank 6) -- 73 bonus weapon damage, 270 Effect_3 dummy (tooltip only)
-    { 36, 90124 },   // Blood Boil (Rank 5) -- 58-69 Shadow damage
-    { 36, 90163 },   // Horn of Winter (Rank 4) -- 50 Strength, 50 Agility
-    { 37, 90006 },   // Icy Touch (Rank 7) -- 88-95 Frost damage
-    { 37, 90026 },   // Plague Strike (Rank 7) -- 85 bonus weapon damage
-    { 37, 90046 },   // Blood Strike (Rank 7) -- 177 bonus weapon damage
+    { 36, 90085 },   // Death Strike (Rank 6) -- 76 bonus weapon damage, 279 Effect_3 dummy (tooltip only)
+    { 36, 90124 },   // Blood Boil (Rank 5) -- 59-71 Shadow damage
+    { 36, 90163 },   // Horn of Winter (Rank 4) -- 52 Strength, 52 Agility
+    { 37, 90006 },   // Icy Touch (Rank 7) -- 91-98 Frost damage
+    { 37, 90026 },   // Plague Strike (Rank 7) -- 88 bonus weapon damage
+    { 37, 90046 },   // Blood Strike (Rank 7) -- 183 bonus weapon damage
     { 38, 48265 },   // Unholy Presence -- stock spell, nothing to scale
-    { 38, 90066 },   // Death Coil (Rank 7) -- 119 Shadow damage
-    { 38, 90142 },   // Death and Decay (Rank 3) -- 17 Shadow damage per second
+    { 38, 90066 },   // Death Coil (Rank 7) -- 122 Shadow damage
+    { 38, 90142 },   // Death and Decay (Rank 3) -- 18 Shadow damage per second
     { 40, 47568 },   // Empower Rune Weapon -- stock spell, nothing to scale
-    { 42, 90086 },   // Death Strike (Rank 7) -- 85 bonus weapon damage, 311 Effect_3 dummy (tooltip only)
-    { 42, 90125 },   // Blood Boil (Rank 6) -- 66-79 Shadow damage
-    { 42, 90164 },   // Horn of Winter (Rank 5) -- 57 Strength, 57 Agility
-    { 43, 90007 },   // Icy Touch (Rank 8) -- 101-109 Frost damage
-    { 43, 90027 },   // Plague Strike (Rank 8) -- 98 bonus weapon damage
-    { 43, 90047 },   // Blood Strike (Rank 8) -- 205 bonus weapon damage
-    { 44, 90067 },   // Death Coil (Rank 8) -- 136 Shadow damage
-    { 44, 90143 },   // Death and Decay (Rank 4) -- 19 Shadow damage per second
+    { 42, 90086 },   // Death Strike (Rank 7) -- 87 bonus weapon damage, 318 Effect_3 dummy (tooltip only)
+    { 42, 90125 },   // Blood Boil (Rank 6) -- 68-81 Shadow damage
+    { 42, 90164 },   // Horn of Winter (Rank 5) -- 59 Strength, 59 Agility
+    { 43, 90007 },   // Icy Touch (Rank 8) -- 103-111 Frost damage
+    { 43, 90027 },   // Plague Strike (Rank 8) -- 100 bonus weapon damage
+    { 43, 90047 },   // Blood Strike (Rank 8) -- 209 bonus weapon damage
+    { 44, 90067 },   // Death Coil (Rank 8) -- 138 Shadow damage
+    { 44, 90143 },   // Death and Decay (Rank 4) -- 20 Shadow damage per second
     { 45, 42650 },   // Army of the Dead -- stock spell, nothing to scale
-    { 48, 90087 },   // Death Strike (Rank 8) -- 96 bonus weapon damage, 352 Effect_3 dummy (tooltip only)
-    { 48, 90126 },   // Blood Boil (Rank 7) -- 75-90 Shadow damage
-    { 48, 90165 },   // Horn of Winter (Rank 6) -- 65 Strength, 65 Agility
-    { 49, 90008 },   // Icy Touch (Rank 9) -- 114-123 Frost damage
-    { 49, 90028 },   // Plague Strike (Rank 9) -- 112 bonus weapon damage
-    { 49, 90048 },   // Blood Strike (Rank 9) -- 232 bonus weapon damage
-    { 50, 90068 },   // Death Coil (Rank 9) -- 153 Shadow damage
+    { 48, 90087 },   // Death Strike (Rank 8) -- 98 bonus weapon damage, 356 Effect_3 dummy (tooltip only)
+    { 48, 90126 },   // Blood Boil (Rank 7) -- 76-91 Shadow damage
+    { 48, 90165 },   // Horn of Winter (Rank 6) -- 66 Strength, 66 Agility
+    { 49, 90008 },   // Icy Touch (Rank 9) -- 115-124 Frost damage
+    { 49, 90028 },   // Plague Strike (Rank 9) -- 113 bonus weapon damage
+    { 49, 90048 },   // Blood Strike (Rank 9) -- 235 bonus weapon damage
+    { 50, 90068 },   // Death Coil (Rank 9) -- 154 Shadow damage
     { 50, 90144 },   // Death and Decay (Rank 5) -- 22 Shadow damage per second
-    { 54, 90088 },   // Death Strike (Rank 9) -- 108 bonus weapon damage, 392 Effect_3 dummy (tooltip only)
-    { 54, 90127 },   // Blood Boil (Rank 8) -- 83-100 Shadow damage
-    { 54, 90166 },   // Horn of Winter (Rank 7) -- 72 Strength, 72 Agility
+    { 54, 90088 },   // Death Strike (Rank 9) -- 108 bonus weapon damage, 394 Effect_3 dummy (tooltip only)
+    { 54, 90127 },   // Blood Boil (Rank 8) -- 84-101 Shadow damage
+    { 54, 90166 },   // Horn of Winter (Rank 7) -- 73 Strength, 73 Agility
     { 55, 45462 },   // Plague Strike (Rank 10) -- stock 45462, the 55+ handoff
     { 55, 45477 },   // Icy Touch (Rank 10) -- stock 45477, the 55+ handoff
     { 55, 45902 },   // Blood Strike (Rank 10) -- stock 45902, the 55+ handoff
     { 55, 47541 },   // Death Coil (Rank 10) -- stock 47541, the 55+ handoff
     { 56, 49998 },   // Death Strike (Rank 10) -- stock 49998, the 55+ handoff
-    { 56, 90145 },   // Death and Decay (Rank 6) -- 24 Shadow damage per second
+    { 56, 90145 },   // Death and Decay (Rank 6) -- 25 Shadow damage per second
     { 58, 48721 },   // Blood Boil (Rank 9) -- stock 48721, the 55+ handoff
     { 60, 43265 },   // Death and Decay (Rank 7) -- stock 43265, the 55+ handoff
     { 60, 90167 },   // Horn of Winter (Rank 8) -- 80 Strength, 80 Agility

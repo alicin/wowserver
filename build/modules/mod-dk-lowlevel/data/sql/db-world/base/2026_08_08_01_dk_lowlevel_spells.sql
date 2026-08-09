@@ -117,13 +117,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 3,   -- $M = BasePoints + DieSides = 12
+  `EffectDieSides_1`           = 3,   -- $M = BasePoints + DieSides = 13
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 9,   -- $m = BasePoints + 1 = 10
+  `EffectBasePoints_1`         = 10,   -- $m = BasePoints + 1 = 11
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -355,13 +355,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 3,   -- $M = BasePoints + DieSides = 25
+  `EffectDieSides_1`           = 3,   -- $M = BasePoints + DieSides = 27
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 22,   -- $m = BasePoints + 1 = 23
+  `EffectBasePoints_1`         = 24,   -- $m = BasePoints + 1 = 25
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -593,13 +593,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 3,   -- $M = BasePoints + DieSides = 39
+  `EffectDieSides_1`           = 3,   -- $M = BasePoints + DieSides = 42
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 36,   -- $m = BasePoints + 1 = 37
+  `EffectBasePoints_1`         = 39,   -- $m = BasePoints + 1 = 40
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -831,13 +831,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 4,   -- $M = BasePoints + DieSides = 53
+  `EffectDieSides_1`           = 5,   -- $M = BasePoints + DieSides = 56
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 49,   -- $m = BasePoints + 1 = 50
+  `EffectBasePoints_1`         = 51,   -- $m = BasePoints + 1 = 52
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -1069,13 +1069,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 5,   -- $M = BasePoints + DieSides = 67
+  `EffectDieSides_1`           = 6,   -- $M = BasePoints + DieSides = 71
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 62,   -- $m = BasePoints + 1 = 63
+  `EffectBasePoints_1`         = 65,   -- $m = BasePoints + 1 = 66
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -1307,13 +1307,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 7,   -- $M = BasePoints + DieSides = 81
+  `EffectDieSides_1`           = 7,   -- $M = BasePoints + DieSides = 84
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 74,   -- $m = BasePoints + 1 = 75
+  `EffectBasePoints_1`         = 77,   -- $m = BasePoints + 1 = 78
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -1545,13 +1545,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 8,   -- $M = BasePoints + DieSides = 95
+  `EffectDieSides_1`           = 8,   -- $M = BasePoints + DieSides = 98
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 87,   -- $m = BasePoints + 1 = 88
+  `EffectBasePoints_1`         = 90,   -- $m = BasePoints + 1 = 91
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -1783,13 +1783,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 9,   -- $M = BasePoints + DieSides = 109
+  `EffectDieSides_1`           = 9,   -- $M = BasePoints + DieSides = 111
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 100,   -- $m = BasePoints + 1 = 101
+  `EffectBasePoints_1`         = 102,   -- $m = BasePoints + 1 = 103
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -2021,13 +2021,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 64,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 10,   -- $M = BasePoints + DieSides = 123
+  `EffectDieSides_1`           = 10,   -- $M = BasePoints + DieSides = 124
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 1,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 113,   -- $m = BasePoints + 1 = 114
+  `EffectBasePoints_1`         = 114,   -- $m = BasePoints + 1 = 115
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = -1,
   `EffectMechanic_1`           = 0,
@@ -2265,7 +2265,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 4,   -- $m = 5
+  `EffectBasePoints_1`         = 5,   -- $m = 6
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -2503,7 +2503,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 18,   -- $m = 19
+  `EffectBasePoints_1`         = 19,   -- $m = 20
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -2741,7 +2741,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 31,   -- $m = 32
+  `EffectBasePoints_1`         = 33,   -- $m = 34
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -2979,7 +2979,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 44,   -- $m = 45
+  `EffectBasePoints_1`         = 47,   -- $m = 48
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -3217,7 +3217,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 57,   -- $m = 58
+  `EffectBasePoints_1`         = 61,   -- $m = 62
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -3455,7 +3455,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 71,   -- $m = 72
+  `EffectBasePoints_1`         = 74,   -- $m = 75
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -3693,7 +3693,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 84,   -- $m = 85
+  `EffectBasePoints_1`         = 87,   -- $m = 88
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -3931,7 +3931,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 97,   -- $m = 98
+  `EffectBasePoints_1`         = 99,   -- $m = 100
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -4169,7 +4169,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 111,   -- $m = 112
+  `EffectBasePoints_1`         = 112,   -- $m = 113
   `EffectBasePoints_2`         = 49,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -4407,7 +4407,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 10,   -- $m = 11
+  `EffectBasePoints_1`         = 11,   -- $m = 12
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -4645,7 +4645,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 38,   -- $m = 39
+  `EffectBasePoints_1`         = 41,   -- $m = 42
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -4883,7 +4883,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 65,   -- $m = 66
+  `EffectBasePoints_1`         = 70,   -- $m = 71
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -5121,7 +5121,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 93,   -- $m = 94
+  `EffectBasePoints_1`         = 99,   -- $m = 100
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -5359,7 +5359,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 121,   -- $m = 122
+  `EffectBasePoints_1`         = 127,   -- $m = 128
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -5597,7 +5597,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 148,   -- $m = 149
+  `EffectBasePoints_1`         = 155,   -- $m = 156
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -5835,7 +5835,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 176,   -- $m = 177
+  `EffectBasePoints_1`         = 182,   -- $m = 183
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -6073,7 +6073,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 204,   -- $m = 205
+  `EffectBasePoints_1`         = 208,   -- $m = 209
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -6311,7 +6311,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 231,   -- $m = 232
+  `EffectBasePoints_1`         = 234,   -- $m = 235
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -6549,7 +6549,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 16,   -- $m = 17
+  `EffectBasePoints_1`         = 17,   -- $m = 18
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -6787,7 +6787,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 33,   -- $m = 34
+  `EffectBasePoints_1`         = 35,   -- $m = 36
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -7025,7 +7025,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 50,   -- $m = 51
+  `EffectBasePoints_1`         = 53,   -- $m = 54
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -7263,7 +7263,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 67,   -- $m = 68
+  `EffectBasePoints_1`         = 71,   -- $m = 72
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -7501,7 +7501,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 84,   -- $m = 85
+  `EffectBasePoints_1`         = 88,   -- $m = 89
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -7739,7 +7739,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 101,   -- $m = 102
+  `EffectBasePoints_1`         = 105,   -- $m = 106
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -7977,7 +7977,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 118,   -- $m = 119
+  `EffectBasePoints_1`         = 121,   -- $m = 122
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -8215,7 +8215,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 135,   -- $m = 136
+  `EffectBasePoints_1`         = 137,   -- $m = 138
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -8453,7 +8453,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 152,   -- $m = 153
+  `EffectBasePoints_1`         = 153,   -- $m = 154
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -8691,9 +8691,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 13,   -- $m = 14
+  `EffectBasePoints_1`         = 15,   -- $m = 16
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 66,   -- $m = 67
+  `EffectBasePoints_3`         = 72,   -- $m = 73
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -8929,9 +8929,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 25,   -- $m = 26
+  `EffectBasePoints_1`         = 27,   -- $m = 28
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 107,   -- $m = 108
+  `EffectBasePoints_3`         = 115,   -- $m = 116
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -9167,9 +9167,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 37,   -- $m = 38
+  `EffectBasePoints_1`         = 39,   -- $m = 40
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 147,   -- $m = 148
+  `EffectBasePoints_3`         = 157,   -- $m = 158
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -9405,9 +9405,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 49,   -- $m = 50
+  `EffectBasePoints_1`         = 51,   -- $m = 52
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 188,   -- $m = 189
+  `EffectBasePoints_3`         = 198,   -- $m = 199
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -9643,9 +9643,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 60,   -- $m = 61
+  `EffectBasePoints_1`         = 63,   -- $m = 64
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 229,   -- $m = 230
+  `EffectBasePoints_3`         = 239,   -- $m = 240
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -9881,9 +9881,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 72,   -- $m = 73
+  `EffectBasePoints_1`         = 75,   -- $m = 76
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 269,   -- $m = 270
+  `EffectBasePoints_3`         = 278,   -- $m = 279
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -10119,9 +10119,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 84,   -- $m = 85
+  `EffectBasePoints_1`         = 86,   -- $m = 87
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 310,   -- $m = 311
+  `EffectBasePoints_3`         = 317,   -- $m = 318
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -10357,9 +10357,9 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 95,   -- $m = 96
+  `EffectBasePoints_1`         = 97,   -- $m = 98
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 351,   -- $m = 352
+  `EffectBasePoints_3`         = 355,   -- $m = 356
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -10597,7 +10597,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_3` = 0,
   `EffectBasePoints_1`         = 107,   -- $m = 108
   `EffectBasePoints_2`         = 74,
-  `EffectBasePoints_3`         = 391,   -- $m = 392
+  `EffectBasePoints_3`         = 393,   -- $m = 394
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
   `EffectMechanic_3`           = 0,
@@ -10827,13 +10827,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 5,   -- $M = BasePoints + DieSides = 27
+  `EffectDieSides_1`           = 5,   -- $M = BasePoints + DieSides = 29
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 22,   -- $m = BasePoints + 1 = 23
+  `EffectBasePoints_1`         = 24,   -- $m = BasePoints + 1 = 25
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -11065,13 +11065,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 7,   -- $M = BasePoints + DieSides = 38
+  `EffectDieSides_1`           = 7,   -- $M = BasePoints + DieSides = 40
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 31,   -- $m = BasePoints + 1 = 32
+  `EffectBasePoints_1`         = 33,   -- $m = BasePoints + 1 = 34
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -11303,13 +11303,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 9,   -- $M = BasePoints + DieSides = 48
+  `EffectDieSides_1`           = 9,   -- $M = BasePoints + DieSides = 51
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 39,   -- $m = BasePoints + 1 = 40
+  `EffectBasePoints_1`         = 42,   -- $m = BasePoints + 1 = 43
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -11541,13 +11541,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 10,   -- $M = BasePoints + DieSides = 58
+  `EffectDieSides_1`           = 11,   -- $M = BasePoints + DieSides = 61
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 48,   -- $m = BasePoints + 1 = 49
+  `EffectBasePoints_1`         = 50,   -- $m = BasePoints + 1 = 51
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -11779,13 +11779,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 12,   -- $M = BasePoints + DieSides = 69
+  `EffectDieSides_1`           = 13,   -- $M = BasePoints + DieSides = 71
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 57,   -- $m = BasePoints + 1 = 58
+  `EffectBasePoints_1`         = 58,   -- $m = BasePoints + 1 = 59
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -12017,13 +12017,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 14,   -- $M = BasePoints + DieSides = 79
+  `EffectDieSides_1`           = 14,   -- $M = BasePoints + DieSides = 81
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 65,   -- $m = BasePoints + 1 = 66
+  `EffectBasePoints_1`         = 67,   -- $m = BasePoints + 1 = 68
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -12255,13 +12255,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 16,   -- $M = BasePoints + DieSides = 90
+  `EffectDieSides_1`           = 16,   -- $M = BasePoints + DieSides = 91
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 74,   -- $m = BasePoints + 1 = 75
+  `EffectBasePoints_1`         = 75,   -- $m = BasePoints + 1 = 76
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -12493,13 +12493,13 @@ INSERT INTO `spell_dbc` SET
   `Effect_1`                   = 2,
   `Effect_2`                   = 0,
   `Effect_3`                   = 0,
-  `EffectDieSides_1`           = 18,   -- $M = BasePoints + DieSides = 100
+  `EffectDieSides_1`           = 18,   -- $M = BasePoints + DieSides = 101
   `EffectDieSides_2`           = 0,
   `EffectDieSides_3`           = 0,
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 82,   -- $m = BasePoints + 1 = 83
+  `EffectBasePoints_1`         = 83,   -- $m = BasePoints + 1 = 84
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -12737,7 +12737,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 11,   -- $m = 12
+  `EffectBasePoints_1`         = 12,   -- $m = 13
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -13213,7 +13213,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 16,   -- $m = 17
+  `EffectBasePoints_1`         = 17,   -- $m = 18
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -13451,7 +13451,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 18,   -- $m = 19
+  `EffectBasePoints_1`         = 19,   -- $m = 20
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -13927,7 +13927,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 23,   -- $m = 24
+  `EffectBasePoints_1`         = 24,   -- $m = 25
   `EffectBasePoints_2`         = 0,
   `EffectBasePoints_3`         = 0,
   `EffectMechanic_1`           = 0,
@@ -14165,8 +14165,8 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 26,   -- $m = 27
-  `EffectBasePoints_2`         = 26,   -- $m = 27
+  `EffectBasePoints_1`         = 28,   -- $m = 29
+  `EffectBasePoints_2`         = 28,   -- $m = 29
   `EffectBasePoints_3`         = 44,
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
@@ -14403,8 +14403,8 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 34,   -- $m = 35
-  `EffectBasePoints_2`         = 34,   -- $m = 35
+  `EffectBasePoints_1`         = 36,   -- $m = 37
+  `EffectBasePoints_2`         = 36,   -- $m = 37
   `EffectBasePoints_3`         = 44,
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
@@ -14641,8 +14641,8 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 41,   -- $m = 42
-  `EffectBasePoints_2`         = 41,   -- $m = 42
+  `EffectBasePoints_1`         = 43,   -- $m = 44
+  `EffectBasePoints_2`         = 43,   -- $m = 44
   `EffectBasePoints_3`         = 44,
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
@@ -14879,8 +14879,8 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 49,   -- $m = 50
-  `EffectBasePoints_2`         = 49,   -- $m = 50
+  `EffectBasePoints_1`         = 51,   -- $m = 52
+  `EffectBasePoints_2`         = 51,   -- $m = 52
   `EffectBasePoints_3`         = 44,
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
@@ -15117,8 +15117,8 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 56,   -- $m = 57
-  `EffectBasePoints_2`         = 56,   -- $m = 57
+  `EffectBasePoints_1`         = 58,   -- $m = 59
+  `EffectBasePoints_2`         = 58,   -- $m = 59
   `EffectBasePoints_3`         = 44,
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
@@ -15355,8 +15355,8 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 64,   -- $m = 65
-  `EffectBasePoints_2`         = 64,   -- $m = 65
+  `EffectBasePoints_1`         = 65,   -- $m = 66
+  `EffectBasePoints_2`         = 65,   -- $m = 66
   `EffectBasePoints_3`         = 44,
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
@@ -15593,8 +15593,8 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 71,   -- $m = 72
-  `EffectBasePoints_2`         = 71,   -- $m = 72
+  `EffectBasePoints_1`         = 72,   -- $m = 73
+  `EffectBasePoints_2`         = 72,   -- $m = 73
   `EffectBasePoints_3`         = 44,
   `EffectMechanic_1`           = 0,
   `EffectMechanic_2`           = 0,
@@ -16069,7 +16069,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 6,   -- $m = 7
+  `EffectBasePoints_1`         = 7,   -- $m = 8
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -16307,7 +16307,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 12,   -- $m = 13
+  `EffectBasePoints_1`         = 13,   -- $m = 14
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -16545,7 +16545,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 18,   -- $m = 19
+  `EffectBasePoints_1`         = 19,   -- $m = 20
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -16783,7 +16783,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 24,   -- $m = 25
+  `EffectBasePoints_1`         = 25,   -- $m = 26
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -17021,7 +17021,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 30,   -- $m = 31
+  `EffectBasePoints_1`         = 31,   -- $m = 32
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -17259,7 +17259,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 35,   -- $m = 36
+  `EffectBasePoints_1`         = 37,   -- $m = 38
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -17497,7 +17497,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 41,   -- $m = 42
+  `EffectBasePoints_1`         = 42,   -- $m = 43
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -17735,7 +17735,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 47,   -- $m = 48
+  `EffectBasePoints_1`         = 48,   -- $m = 49
   `EffectBasePoints_2`         = 74,
   `EffectBasePoints_3`         = 1309,
   `EffectMechanic_1`           = 0,
@@ -18449,7 +18449,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 18,   -- $m = 19
+  `EffectBasePoints_1`         = 20,   -- $m = 21
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -18687,7 +18687,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 32,   -- $m = 33
+  `EffectBasePoints_1`         = 35,   -- $m = 36
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -18925,7 +18925,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 46,   -- $m = 47
+  `EffectBasePoints_1`         = 49,   -- $m = 50
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -19163,7 +19163,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 60,   -- $m = 61
+  `EffectBasePoints_1`         = 63,   -- $m = 64
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -19401,7 +19401,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 74,   -- $m = 75
+  `EffectBasePoints_1`         = 77,   -- $m = 78
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -19639,7 +19639,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 87,   -- $m = 88
+  `EffectBasePoints_1`         = 90,   -- $m = 91
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -19877,7 +19877,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 101,   -- $m = 102
+  `EffectBasePoints_1`         = 104,   -- $m = 105
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,
@@ -20115,7 +20115,7 @@ INSERT INTO `spell_dbc` SET
   `EffectRealPointsPerLevel_1` = 0,
   `EffectRealPointsPerLevel_2` = 0,
   `EffectRealPointsPerLevel_3` = 0,
-  `EffectBasePoints_1`         = 115,   -- $m = 116
+  `EffectBasePoints_1`         = 116,   -- $m = 117
   `EffectBasePoints_2`         = 39,
   `EffectBasePoints_3`         = 24,
   `EffectMechanic_1`           = 0,

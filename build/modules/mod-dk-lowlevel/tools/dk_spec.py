@@ -234,6 +234,28 @@ def power(level, weapon_flat=False):
     return at1 + (1.0 - at1) * (level - 1) / (POWER_TOP_LEVEL - 1)
 
 
+# DELIBERATE OVERTUNE, 1..54 only.
+#
+# The curve above is calibrated to sit a low-level DK ALONGSIDE its peers. The user wants them
+# noticeably ahead of that: +10% on every custom rank. Applied to the RATIO rather than to the
+# final cell so it lands identically on damage, on flat weapon bonuses and on Horn of Winter's
+# stat buff, instead of needing a separate rule per effect type.
+#
+# It TAPERS to nothing at the handoff, rather than being a flat multiplier with a clamp. A flat
+# +10% was tried first and invariant #19 rejected it: the top custom rank of five abilities
+# already sits at ~90-99% of stock, and +10% rounded it to the SAME INTEGER as the level-55 rank
+# it hands off to -- a level-49 Blood Boil hitting for exactly what the level-58 one does. A
+# ceiling constant does not fix that either, because the collision happens in the rounding.
+#
+#     factor(L) = 1 + (OVERTUNE - 1) * (1 - base_ratio(L))
+#
+# so the boost is full strength where the character is weakest and fades as the stock rank
+# approaches: ~+9.2% at level 1, ~+1.0% at level 49, exactly 0 at the handoff. That is also the
+# more defensible shape -- the early levels are where a DK feels thin, and the top custom rank is
+# where an overtune would break the 55 transition.
+OVERTUNE = 1.10
+
+
 def scale_cell(stock_base_points, stock_die_sides, level, handoff_level, weapon_flat=False):
     """(EffectBasePoints, EffectDieSides) for a custom rank, from the stock rank-1 pair.
 
@@ -250,6 +272,7 @@ def scale_cell(stock_base_points, stock_die_sides, level, handoff_level, weapon_
     the record that is live on the realm today, reproduced by formula rather than by hand.
     """
     ratio = power(level, weapon_flat) / power(handoff_level, weapon_flat)
+    ratio *= 1.0 + (OVERTUNE - 1.0) * (1.0 - ratio)
     if stock_die_sides == 0:
         return int(round(stock_base_points * ratio)), 0
     if stock_die_sides == 1:

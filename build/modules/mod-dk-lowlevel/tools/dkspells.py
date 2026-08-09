@@ -1644,13 +1644,33 @@ def check_value_curve(plan, checks):
                           f"({lows[0]})",
                           "the curve rounded a value to zero or below")
 
-    # The one hand-calibrated number in the feature, pinned. If a curve change ever moves it, the
-    # tooltip on a character that already exists on the live realm changes with it.
+    # THE ANCHOR, pinned -- but pinned to the BASE curve, not to the shipped number.
+    #
+    # Icy Touch rank 1 at 10-12 is the one hand-calibrated value in the feature and the whole
+    # power curve is derived from it, so it must not drift by accident. It IS however allowed to
+    # move by INTENT: spec.OVERTUNE is a deliberate, reviewed multiplier. Pinning the shipped
+    # value would make every future balance pass fail this check and train someone to edit the
+    # assertion, which is how a guard stops being a guard.
+    #
+    # So the check is: with the overtune backed out, does the curve still produce exactly 10-12?
+    # That proves the calibration is intact while leaving tuning free.
     it = spec.ICY_TOUCH
     lo, hi = plan.rank_ranges(it, it.ranks[0])[0][1:]
-    checks.expect((lo, hi) == (10, 12), "#19",
-                  "Icy Touch rank 1 is still 10-12, the value verified in production",
-                  f"the curve now produces {lo}-{hi}")
+    saved = spec.OVERTUNE
+    try:
+        spec.OVERTUNE = 1.0
+        base_bp, base_die = spec.scale_cell(
+            plan.stock_cell(it, "EffectBasePoints_1"), plan.stock_cell(it, "EffectDieSides_1"),
+            it.ranks[0].level, it.handoff_level,
+            any(c.weapon_flat for c in it.scaling))
+    finally:
+        spec.OVERTUNE = saved
+    base_lo, base_hi = Plan.cell_range(base_bp, base_die)
+    checks.expect((base_lo, base_hi) == (10, 12), "#19",
+                  "Icy Touch rank 1 base curve is still 10-12, the value verified in production",
+                  f"backing the overtune out gives {base_lo}-{base_hi}")
+    checks.ok("#19", f"Icy Touch rank 1 ships at {lo}-{hi} "
+                     f"(base 10-12 x{spec.OVERTUNE:g} overtune, tapering to 0 at the handoff)")
 
 
 def check_rune_costs(plan, checks):
