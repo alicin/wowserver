@@ -1704,7 +1704,7 @@ INSERT INTO `charstartoutfit_dbc` SET
 -- A9. Action bar for a new Death Knight of each race -- 30 rows.
 --
 -- Button 1 holds the custom rank (90000), so the acceptance test -- hover it
--- and read "10 to 12 Frost damage" -- needs no setup. The stock rows handed out
+-- and read "10-12 Frost damage" -- needs no setup. The stock rows handed out
 -- 45477/45462/45902/47541/49576, all level 55 abilities the character will not know.
 -- 6603 is Attack. The third button is the race's own racial, on the slot and
 -- with the spell Blizzard shipped for that race's Death Knight; the slot is not uniform:

@@ -9,6 +9,10 @@
       FrameXML templates that were confirmed present in THIS client's archives
       (UIPanelTemplates.xml / UIDropDownMenuTemplates.xml in patch-enUS-2/3.MPQ), so nothing
       depends on a library the pack does not ship.
+
+      The filter bar is laid out the way the stock auction house lays its own out: name box
+      first, then category / subcategory / quality as dropdowns, then the numeric ranges and
+      the Usable checkbox on one line. Three rows of controls, then the list.
     -->
 
     <Script file="UI.lua"/>
@@ -21,24 +25,28 @@
       internal junk rows like "NPC Equip 6128"), and a texture with an unresolvable path
       simply draws nothing. Parking a question mark in the BACKGROUND layer means those rows
       show a question mark instead of a hole, with no per-item special-casing anywhere.
+
+      26x26 in a 30px row, with the standard icon border around it. A bag slot is 37px and a
+      character-pane slot 43px; 22px in a 26px row read as decoration rather than as the item.
     -->
     <Button name="ItemBrowserRowTemplate" virtual="true">
         <Size>
-            <AbsDimension x="424" y="26"/>
+            <AbsDimension x="500" y="30"/>
         </Size>
         <Layers>
             <Layer level="BACKGROUND">
                 <Texture name="$parentIconFallback" file="Interface\Icons\INV_Misc_QuestionMark">
                     <Size>
-                        <AbsDimension x="22" y="22"/>
+                        <AbsDimension x="26" y="26"/>
                     </Size>
                     <Anchors>
                         <Anchor point="LEFT">
                             <Offset>
-                                <AbsDimension x="4" y="0"/>
+                                <AbsDimension x="5" y="0"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
+                    <TexCoords left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                 </Texture>
             </Layer>
             <Layer level="BORDER">
@@ -53,43 +61,69 @@
             <Layer level="ARTWORK">
                 <Texture name="$parentIcon">
                     <Size>
-                        <AbsDimension x="22" y="22"/>
+                        <AbsDimension x="26" y="26"/>
                     </Size>
                     <Anchors>
                         <Anchor point="LEFT">
                             <Offset>
-                                <AbsDimension x="4" y="0"/>
+                                <AbsDimension x="5" y="0"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
+                    <!--
+                      Crops the dark border baked into every Interface\Icons\ .blp. The whole
+                      UI does this (see any action button); without it a 26px icon spends
+                      three of those pixels on a smudge.
+                    -->
+                    <TexCoords left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                 </Texture>
-                <FontString name="$parentName" inherits="GameFontNormal" justifyH="LEFT">
+                <!--
+                  wordwrap="false" maxLines="1" on both text columns: a FontString with a
+                  fixed <Size> and no cap WRAPS, and "Sanctified Ymirjar Lord's Breastplate"
+                  wrapping to a second line inside a 30px row would push the layout apart.
+                -->
+                <FontString name="$parentName" inherits="GameFontNormal" justifyH="LEFT"
+                            wordwrap="false" maxLines="1">
                     <Size>
-                        <AbsDimension x="270" y="14"/>
+                        <AbsDimension x="228" y="14"/>
                     </Size>
                     <Anchors>
                         <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT">
                             <Offset>
-                                <AbsDimension x="6" y="0"/>
+                                <AbsDimension x="8" y="0"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
                 </FontString>
-                <FontString name="$parentLevel" inherits="GameFontHighlightSmall" justifyH="RIGHT">
+                <FontString name="$parentCategory" inherits="GameFontDisableSmall"
+                            justifyH="RIGHT" wordwrap="false" maxLines="1">
                     <Size>
-                        <AbsDimension x="52" y="12"/>
+                        <AbsDimension x="106" y="12"/>
                     </Size>
                     <Anchors>
                         <Anchor point="RIGHT">
                             <Offset>
-                                <AbsDimension x="-56" y="0"/>
+                                <AbsDimension x="-120" y="0"/>
+                            </Offset>
+                        </Anchor>
+                    </Anchors>
+                </FontString>
+                <FontString name="$parentLevel" inherits="GameFontHighlightSmall"
+                            justifyH="RIGHT">
+                    <Size>
+                        <AbsDimension x="58" y="12"/>
+                    </Size>
+                    <Anchors>
+                        <Anchor point="RIGHT">
+                            <Offset>
+                                <AbsDimension x="-58" y="0"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
                 </FontString>
                 <FontString name="$parentId" inherits="GameFontDisableSmall" justifyH="RIGHT">
                     <Size>
-                        <AbsDimension x="48" y="12"/>
+                        <AbsDimension x="50" y="12"/>
                     </Size>
                     <Anchors>
                         <Anchor point="RIGHT">
@@ -109,10 +143,42 @@
         <HighlightTexture file="Interface\QuestFrame\UI-QuestTitleHighlight" alphaMode="ADD"/>
     </Button>
 
+    <!--
+      A labelled numeric box. Four of these make the two ranges. The caption is a child of
+      the box it labels rather than of the window: a frame's Layers are built before its
+      Frames, so a FontString declared up in the window's own Layers block cannot anchor to a
+      widget that appears further down in Frames — at the moment the anchor is resolved that
+      widget does not exist yet. Hanging the caption off the EditBox sidesteps the ordering.
+    -->
+    <EditBox name="ItemBrowserRangeBoxTemplate" inherits="InputBoxTemplate" virtual="true"
+             numeric="true" autoFocus="false" letters="3">
+        <Size>
+            <AbsDimension x="36" y="20"/>
+        </Size>
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentLabel" inherits="GameFontNormalSmall" justifyH="RIGHT">
+                    <Anchors>
+                        <Anchor point="RIGHT" relativePoint="LEFT">
+                            <Offset>
+                                <AbsDimension x="-6" y="0"/>
+                            </Offset>
+                        </Anchor>
+                    </Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnTextChanged>ItemBrowser_FilterChanged()</OnTextChanged>
+            <OnEscapePressed>self:ClearFocus()</OnEscapePressed>
+            <OnEnterPressed>self:ClearFocus()</OnEnterPressed>
+        </Scripts>
+    </EditBox>
+
     <Frame name="ItemBrowserFrame" parent="UIParent" toplevel="true" movable="true"
            enableMouse="true" clampedToScreen="true" hidden="true">
         <Size>
-            <AbsDimension x="482" y="528"/>
+            <AbsDimension x="558" y="640"/>
         </Size>
         <Anchors>
             <Anchor point="CENTER"/>
@@ -135,43 +201,58 @@
                     <Anchors>
                         <Anchor point="TOP">
                             <Offset>
-                                <AbsDimension x="0" y="-16"/>
+                                <AbsDimension x="0" y="-14"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
                 </FontString>
                 <FontString name="$parentStatus" inherits="GameFontHighlightSmall" justifyH="LEFT">
                     <Size>
-                        <AbsDimension x="440" y="12"/>
+                        <AbsDimension x="516" y="12"/>
                     </Size>
                     <Anchors>
                         <Anchor point="TOPLEFT">
                             <Offset>
-                                <AbsDimension x="22" y="-72"/>
+                                <AbsDimension x="22" y="-136"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
                 </FontString>
-                <FontString name="$parentRecipient" inherits="GameFontNormal" justifyH="LEFT">
+                <FontString name="$parentSelection" inherits="GameFontNormal" justifyH="LEFT"
+                            wordwrap="false" maxLines="1">
                     <Size>
-                        <AbsDimension x="440" y="14"/>
+                        <AbsDimension x="516" y="14"/>
                     </Size>
                     <Anchors>
                         <Anchor point="BOTTOMLEFT">
                             <Offset>
-                                <AbsDimension x="22" y="46"/>
+                                <AbsDimension x="22" y="62"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
                 </FontString>
-                <FontString name="$parentFeedback" inherits="GameFontDisableSmall" justifyH="LEFT">
+                <FontString name="$parentRecipient" inherits="GameFontNormal" justifyH="LEFT"
+                            wordwrap="false" maxLines="1">
                     <Size>
-                        <AbsDimension x="290" y="12"/>
+                        <AbsDimension x="272" y="14"/>
                     </Size>
                     <Anchors>
                         <Anchor point="BOTTOMLEFT">
                             <Offset>
-                                <AbsDimension x="22" y="24"/>
+                                <AbsDimension x="22" y="42"/>
+                            </Offset>
+                        </Anchor>
+                    </Anchors>
+                </FontString>
+                <FontString name="$parentFeedback" inherits="GameFontDisableSmall" justifyH="LEFT"
+                            wordwrap="false" maxLines="1">
+                    <Size>
+                        <AbsDimension x="272" y="12"/>
+                    </Size>
+                    <Anchors>
+                        <Anchor point="BOTTOMLEFT">
+                            <Offset>
+                                <AbsDimension x="22" y="22"/>
                             </Offset>
                         </Anchor>
                     </Anchors>
@@ -189,19 +270,32 @@
                 </Anchors>
             </Button>
 
+            <!-- ============ filter row 1: the name box ============ -->
             <EditBox name="$parentSearch" inherits="InputBoxTemplate" autoFocus="false"
                      historyLines="10">
                 <Size>
-                    <AbsDimension x="236" y="20"/>
+                    <AbsDimension x="330" y="20"/>
                 </Size>
                 <Anchors>
                     <Anchor point="TOPLEFT">
                         <Offset>
-                            <AbsDimension x="26" y="-42"/>
+                            <AbsDimension x="70" y="-40"/>
                         </Offset>
                     </Anchor>
                 </Anchors>
                 <Layers>
+                    <Layer level="ARTWORK">
+                        <FontString name="$parentLabel" inherits="GameFontNormalSmall"
+                                    justifyH="RIGHT" text="Name">
+                            <Anchors>
+                                <Anchor point="RIGHT" relativePoint="LEFT">
+                                    <Offset>
+                                        <AbsDimension x="-6" y="0"/>
+                                    </Offset>
+                                </Anchor>
+                            </Anchors>
+                        </FontString>
+                    </Layer>
                     <Layer level="OVERLAY">
                         <FontString name="$parentHint" inherits="GameFontDisableSmall"
                                     justifyH="LEFT" text="name or item id...">
@@ -222,32 +316,127 @@
                 </Scripts>
             </EditBox>
 
-            <Frame name="$parentQuality" inherits="UIDropDownMenuTemplate">
+            <Button name="$parentReset" inherits="UIPanelButtonTemplate">
+                <Size>
+                    <AbsDimension x="76" y="22"/>
+                </Size>
                 <Anchors>
                     <Anchor point="TOPRIGHT">
                         <Offset>
-                            <AbsDimension x="-6" y="-34"/>
+                            <AbsDimension x="-18" y="-39"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+                <Scripts>
+                    <OnClick>ItemBrowser_ResetFilters()</OnClick>
+                </Scripts>
+            </Button>
+
+            <!-- ============ filter row 2: category / subcategory / quality ============ -->
+            <Frame name="$parentCategory" inherits="UIDropDownMenuTemplate">
+                <Anchors>
+                    <Anchor point="TOPLEFT">
+                        <Offset>
+                            <AbsDimension x="8" y="-62"/>
                         </Offset>
                     </Anchor>
                 </Anchors>
             </Frame>
 
+            <Frame name="$parentSubCategory" inherits="UIDropDownMenuTemplate">
+                <Anchors>
+                    <Anchor point="LEFT" relativeTo="$parentCategory" relativePoint="RIGHT">
+                        <Offset>
+                            <AbsDimension x="-12" y="0"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+            </Frame>
+
+            <Frame name="$parentQuality" inherits="UIDropDownMenuTemplate">
+                <Anchors>
+                    <Anchor point="LEFT" relativeTo="$parentSubCategory" relativePoint="RIGHT">
+                        <Offset>
+                            <AbsDimension x="-12" y="0"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+            </Frame>
+
+            <!-- ============ filter row 3: the two ranges and Usable ============ -->
+            <EditBox name="$parentLevelMin" inherits="ItemBrowserRangeBoxTemplate">
+                <Anchors>
+                    <Anchor point="TOPLEFT">
+                        <Offset>
+                            <AbsDimension x="94" y="-102"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+            </EditBox>
+            <EditBox name="$parentLevelMax" inherits="ItemBrowserRangeBoxTemplate">
+                <Anchors>
+                    <Anchor point="LEFT" relativeTo="$parentLevelMin" relativePoint="RIGHT">
+                        <Offset>
+                            <AbsDimension x="22" y="0"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+            </EditBox>
+
+            <EditBox name="$parentIlvlMin" inherits="ItemBrowserRangeBoxTemplate" letters="4">
+                <Anchors>
+                    <Anchor point="LEFT" relativeTo="$parentLevelMax" relativePoint="RIGHT">
+                        <Offset>
+                            <AbsDimension x="72" y="0"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+            </EditBox>
+            <EditBox name="$parentIlvlMax" inherits="ItemBrowserRangeBoxTemplate" letters="4">
+                <Anchors>
+                    <Anchor point="LEFT" relativeTo="$parentIlvlMin" relativePoint="RIGHT">
+                        <Offset>
+                            <AbsDimension x="22" y="0"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+            </EditBox>
+
+            <CheckButton name="$parentUsable" inherits="UICheckButtonTemplate">
+                <Size>
+                    <AbsDimension x="24" y="24"/>
+                </Size>
+                <Anchors>
+                    <Anchor point="TOPRIGHT">
+                        <Offset>
+                            <AbsDimension x="-108" y="-98"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+                <Scripts>
+                    <OnClick>ItemBrowser_FilterChanged()</OnClick>
+                    <OnEnter>ItemBrowser_UsableEnter(self)</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
+                </Scripts>
+            </CheckButton>
+
             <!--
               List surface. Rows are CHILDREN of this frame, drawn on top of the
               FauxScrollFrame rather than inside it: a faux scroll frame never actually
               scrolls its content, it just reports an offset and the owner re-fills a fixed
-              set of rows. Fourteen rows is the whole widget budget no matter how many items
-              match. Mouse wheel is handled here because an unhandled wheel event walks up
-              the parent chain from whichever row the cursor is over.
+              set of rows. Thirteen rows is the whole widget budget no matter how many items
+              match — and with no filters at all, 46,098 of them do. Mouse wheel is handled
+              here because an unhandled wheel event walks up the parent chain from whichever
+              row the cursor is over.
             -->
             <Frame name="$parentList" enableMouse="true">
                 <Size>
-                    <AbsDimension x="454" y="372"/>
+                    <AbsDimension x="530" y="398"/>
                 </Size>
                 <Anchors>
                     <Anchor point="TOPLEFT">
                         <Offset>
-                            <AbsDimension x="14" y="-90"/>
+                            <AbsDimension x="14" y="-152"/>
                         </Offset>
                     </Anchor>
                 </Anchors>
@@ -266,7 +455,7 @@
                 <Frames>
                     <ScrollFrame name="$parentScroll" inherits="FauxScrollFrameTemplate">
                         <Size>
-                            <AbsDimension x="424" y="364"/>
+                            <AbsDimension x="500" y="390"/>
                         </Size>
                         <Anchors>
                             <Anchor point="TOPLEFT">
@@ -277,7 +466,7 @@
                         </Anchors>
                         <Scripts>
                             <OnVerticalScroll>
-                                FauxScrollFrame_OnVerticalScroll(self, offset, 26, ItemBrowser_UpdateList)
+                                FauxScrollFrame_OnVerticalScroll(self, offset, 30, ItemBrowser_UpdateList)
                             </OnVerticalScroll>
                         </Scripts>
                     </ScrollFrame>
@@ -290,7 +479,7 @@
 
             <Button name="$parentGive" inherits="UIPanelButtonTemplate" text="Give">
                 <Size>
-                    <AbsDimension x="96" y="24"/>
+                    <AbsDimension x="150" y="24"/>
                 </Size>
                 <Anchors>
                     <Anchor point="BOTTOMRIGHT">
@@ -301,6 +490,8 @@
                 </Anchors>
                 <Scripts>
                     <OnClick>ItemBrowser_GiveClicked()</OnClick>
+                    <OnEnter>ItemBrowser_GiveEnter(self)</OnEnter>
+                    <OnLeave>GameTooltip:Hide()</OnLeave>
                 </Scripts>
             </Button>
 
@@ -316,13 +507,6 @@
                         </Offset>
                     </Anchor>
                 </Anchors>
-                <!--
-                  The "Qty" caption is a child of the box it labels, not of the window.
-                  A frame's Layers are built before its Frames, so a FontString up in the
-                  window's own Layers block cannot anchor to a widget declared further down
-                  in Frames: at the moment the anchor is resolved, that widget does not exist
-                  yet. Hanging the caption off the EditBox sidesteps the ordering entirely.
-                -->
                 <Layers>
                     <Layer level="ARTWORK">
                         <FontString name="$parentLabel" inherits="GameFontNormalSmall" text="Qty">
@@ -337,6 +521,7 @@
                     </Layer>
                 </Layers>
                 <Scripts>
+                    <OnTextChanged>ItemBrowser_QuantityChanged()</OnTextChanged>
                     <OnEscapePressed>self:ClearFocus()</OnEscapePressed>
                     <OnEnterPressed>self:ClearFocus()</OnEnterPressed>
                 </Scripts>

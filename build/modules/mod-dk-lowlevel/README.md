@@ -123,9 +123,13 @@ if player->getClass() != 6        -> return
 for each { level, spellId } in kDkProgression, ascending:
       if level > player level     -> break
       if not HasSpell(spellId)    -> learnSpell(spellId)
-then the four ex-starter-chain utilities, each behind its own level gate and HasSpell guard:
-      Death Gate 50977, Runeforging 53428, Apprentice Riding 33388 @20, Journeyman 33391 @40
+then the two ex-starter-chain utilities, each behind its own config level gate and HasSpell guard:
+      Death Gate 50977, Runeforging 53428
 ```
+
+Riding is deliberately absent: stock `SkillLineAbility` 19184 already gives every Death Knight
+Journeyman Riding (33391) at creation, and granting Apprentice Riding (33388) on top would
+*downgrade* the skill value through its `SpellLearnSkillNode`.
 
 **Idempotent.** The only mutation is `learnSpell`, guarded by `HasSpell` here and early-returning
 on `HasActiveSpell` internally (`Player.cpp:3411-3416`). The effect is a pure function of
@@ -152,11 +156,38 @@ cannot be intercepted.
 the spell store. This matters: `PlayerbotMgr.cpp:208` routes every bot login through
 `HandlePlayerLoginFromDB`, so `Reconcile` runs for every bot on the realm.
 
-Rank 1 of each ability is *also* granted for free by the core, via `SkillLineAbility`
-`AcquireMethod = 2` → `learnSkillRewardedSpells`, at creation and again from `Player::_LoadSkills`
-on every login. mod-learn-spells will independently hand out ranks 2+ on level-up. All three paths
-agree; whichever runs first wins and the others find `HasSpell` true. This module is the
-authoritative one — it is the only one that also covers login.
+Rank 1 of the three abilities that start at **level 1** — Icy Touch, Plague Strike, Blood Strike
+— is *also* granted for free by the core, via `SkillLineAbility` `AcquireMethod = 2` →
+`learnSkillRewardedSpells`, at creation and again from `Player::_LoadSkills` on every login.
+Nothing else may carry `AcquireMethod = 2`: it fires at character creation with no level test
+anywhere in that path, so a level-2 ability marked that way would be in the spellbook at level 1.
+mod-learn-spells will independently hand out ranks 2+ on level-up. All three paths agree; whichever
+runs first wins and the others find `HasSpell` true. This module is the authoritative one — it is
+the only one that also covers login, and the only one that does not depend on another module being
+installed.
+
+## What the table contains
+
+93 grants across levels 1–65, of three kinds, all `learnSpell` to this module:
+
+| kind | count | what it is |
+|---|---|---|
+| custom low rank | 67 | a byte-clone of the stock rank 1 with its damage/heal/stat cells scaled to the level, sitting below the stock ranks in a renumbered `spell_ranks` chain |
+| stock spell, granted early | 18 | an ability with nothing to scale — a percentage, a taunt, a summon that scales to its owner. Blizzard's own record, unmodified |
+| stock rank 1, at its own `BaseLevel` | 8 | the handoff. From 55–65 the character is on stock Blizzard data |
+
+Eight abilities are re-ranked, and which eight is *derived* rather than chosen: exactly those that
+Blizzard themselves ship multiple ranks of, i.e. those whose stock ranks differ in an absolute
+value cell. One custom rank every six levels, matching Blizzard's own DK rank spacing, from the
+ability's intro level up to the first stock rank. See the long comment at the top of the
+progression section in `tools/dk_spec.py` for the scaling curve and its single anchor.
+
+Two further chains — the off-hand halves of Death Strike and Blood Strike — are re-ranked as well,
+for 85 generated `Spell.dbc` records in total. They are never learned and never appear in the
+table above. They exist because `spell_dk_threat_of_thassarian` looks the off-hand spell up *by
+the main-hand rank number* and `SpellMgr::GetSpellWithRank` follows `node->next->Id` with no null
+check: an off-hand chain shorter than its main-hand chain is a worldserver segfault. Read
+`MIRROR_CHAINS_WHY` in `tools/dk_spec.py` before touching either of them.
 
 ## Config
 

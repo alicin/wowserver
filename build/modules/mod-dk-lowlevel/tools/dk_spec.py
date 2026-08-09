@@ -89,14 +89,27 @@ SLA_ID_BASE = 22000
 
 # 20 IDs per stock ability, block index fixed now so IDs never move when more abilities ship.
 # spell id = SPELL_ID_BASE + 20*block + rank_index ; sla id = SLA_ID_BASE + (spell - 90000).
+#
+# Block 5 was reserved for Blood Presence and is now PERMANENTLY VACANT. Blood Presence turned
+# out to need no custom rank at all (see FLAT_GRANTS), but 90000-90019 is already live on a real
+# character and the whole point of a fixed block map is that an ID never moves once it has been
+# in a client's cache. Reusing 90100-90119 for something else later would be the one way to
+# break that, so the hole stays.
 IDS_PER_ABILITY = 20
 ABILITY_BLOCKS = {
-    "icy_touch":      0,      # 90000-90019   stock rank 1 = 45477   <- THE SLICE
+    "icy_touch":      0,      # 90000-90019   stock rank 1 = 45477   <- shipped first
     "plague_strike":  1,      # 90020-90039   45462
     "blood_strike":   2,      # 90040-90059   45902
     "death_coil":     3,      # 90060-90079   47541
     "death_strike":   4,      # 90080-90099   49998
-    "blood_presence": 5,      # 90100-90119   48266
+    "blood_presence": 5,      # 90100-90119   RESERVED, VACANT -- granted as stock, see above
+    "blood_boil":     6,      # 90120-90139   48721
+    "death_and_decay": 7,     # 90140-90159   43265
+    "horn_of_winter": 8,      # 90160-90179   57330
+    # Not abilities anyone learns -- the off-hand halves Threat of Thassarian casts. See
+    # MIRROR_CHAINS_WHY.
+    "death_strike_offhand": 9,   # 90180-90199   66188
+    "blood_strike_offhand": 10,  # 90200-90219   66215
 }
 
 
@@ -109,158 +122,559 @@ def sla_id_for(spell_id):
 
 
 # ------------------------------------------------------------------ the progression spec --
+#
+# TWO KINDS OF ABILITY, AND THE TEST THAT SEPARATES THEM
+# ------------------------------------------------------
+# The brief's table has 28 abilities on it. Only eight of them need a custom rank.
+#
+# The test is derived, not chosen: *does Blizzard themselves re-rank it?* Diff every stock rank
+# of a DK ability against rank 1 cell by cell (tools/dkspells.py --check re-runs exactly this
+# diff as invariant #19) and the answer is unambiguous. Eight abilities carry a rank-varying
+# ABSOLUTE number -- flat damage, flat heal, flat stat points -- and Blizzard ships 2-6 ranks of
+# each to keep that number level-appropriate:
+#
+#     Icy Touch   EffectBasePoints_1/DieSides_1       126/11 -> 226/19  over 5 ranks
+#     Plague Strike EffectBasePoints_1                   124 -> 377     over 6
+#     Blood Strike  EffectBasePoints_1                   259 -> 763     over 6
+#     Death Coil    EffectBasePoints_1                   166 -> 442     over 5
+#     Death Strike  EffectBasePoints_1, _3          111, 405 -> 296,1309 over 5
+#     Blood Boil  EffectBasePoints_1/DieSides_1        88/19 -> 179/41  over 4
+#     Death and Decay EffectBasePoints_1                  25 -> 61      over 4
+#     Horn of Winter EffectBasePoints_1, _2           85, 85 -> 154,154 over 2
+#
+# The other twenty do not have a single rank in the game, because there is nothing in them to
+# scale: they are percentages (all three Presences, Anti-Magic Shell, Icebound Fortitude, Death
+# Pact), pure weapon-damage multipliers (Rune Strike), or effects with no magnitude at all
+# (Death Grip, Mind Freeze, Pestilence, Chains of Ice, Dark Command, Raise Dead, Path of Frost,
+# Blood Tap, Strangulate, Empower Rune Weapon, Army of the Dead, Death Gate, Runeforging).
+# A level-20 Anti-Magic Shell that absorbs 75% of magic damage IS the level-68 one; cloning it
+# would produce a byte-identical record with a different ID.
+#
+# So those twenty are granted as the STOCK SPELL at the brief's level -- FLAT_GRANTS below.
+# That is safe because a known spell is not level-gated anywhere: the only caster-level tests in
+# Spell.cpp are for pet spells (:6142, :6164) and item enchants (:7491, :7571), CalcValue only
+# consults BaseLevel/SpellLevel when EffectRealPointsPerLevel is non-zero (SpellInfo.cpp:415-427)
+# and CalculateLevelPenalty returns 1.0 whenever MaxLevel is 0 (Unit.cpp:3203-3222), which it is
+# for every one of them. It is also the cheapest possible implementation: no ID, no DBC record,
+# no SkillLineAbility row, no spell_ranks chain, no client patch entry, and nothing that can
+# drift from Blizzard's data because it IS Blizzard's data.
+#
+# WHY SIX LEVELS BETWEEN CUSTOM RANKS
+# -----------------------------------
+# Blizzard's own DK rank spacing, read off the stock file: Icy Touch 55/61/67/73/78, Plague
+# Strike 55/60/65/70/75/80, Death and Decay 60/67/73/80. Six levels, give or take. Starting at
+# level 1 and stepping 6 lands the ladder on 1, 7, 13, 19, 25, 31, 37, 43, 49 -- and the next
+# step would be 55, which is exactly where the stock rank already sits. The cadence and the
+# handoff agree without either being forced. Nine custom ranks over fifty-four levels is the
+# same rank density Blizzard uses over levels 55-80; one rank every other level would be
+# twenty-five rows of noise and one rank for the whole range would leave a level-50 Death Knight
+# hitting for level-1 numbers.
+#
+# THE POWER CURVE, AND THE SINGLE NUMBER IT IS ANCHORED ON
+# --------------------------------------------------------
+# There is exactly one hand-calibrated number in this whole feature, and it is already live and
+# verified in production: Icy Touch rank 1 does 10-12 at level 1. It was calibrated against real
+# level-1 content parsed out of Spell.dbc -- 133 Fireball rank 1 is 14-22 over a 1.5s cast, 78
+# Heroic Strike rank 1 is +11 on a swing -- and a Blood Elf DK on the live realm shows that
+# tooltip and rolls that damage.
+#
+# Stock Icy Touch rank 1 averages 132. So the shipped anchor says: level-1 power is 11/132 of
+# level-55 power, which is 1/12 exactly. Everything else follows from that one ratio:
+#
+#     power(L) = 1/12 + (11/12) * (L - 1) / 54          power(1) = 1/12, power(55) = 1
+#
+# and a custom rank's value for any cell is the STOCK rank-1 value of that same cell scaled by
+# power(L) / power(handoff level). Linear, two-point-anchored, no free parameters, and it
+# reproduces the shipped 10-12 exactly (see scale_cell). Nothing is typed in twice: the stock
+# values are read out of Spell.dbc at generate time, never transcribed here.
+#
+# Abilities that hand over above 55 (Blood Boil 58, Death and Decay 60, Horn of Winter 65) are
+# normalised by power(handoff) rather than power(55), so "the rank you have at level L is
+# power(L) of what the first stock rank is worth" holds for all eight uniformly.
+
+RANK_STEP = 6                   # levels between consecutive custom ranks
+POWER_TOP_LEVEL = 55            # power(POWER_TOP_LEVEL) == 1 by definition
+POWER_AT_LEVEL_1 = 11.0 / 132.0  # = 1/12, from the live, verified Icy Touch rank 1
+# A low rank whose die sides scale to 1 would roll one fixed number, which reads as a bug in a
+# tooltip that says "$m1 to $M1". Three is the smallest spread that still looks like a damage
+# range, and it is what the shipped rank 1 already uses.
+MIN_DIE_SIDES = 3
+
+
+def power(level):
+    """Fraction of first-stock-rank power appropriate at `level`. power(55) == 1."""
+    return POWER_AT_LEVEL_1 + (1.0 - POWER_AT_LEVEL_1) * (level - 1) / (POWER_TOP_LEVEL - 1)
+
+
+def scale_cell(stock_base_points, stock_die_sides, level, handoff_level):
+    """(EffectBasePoints, EffectDieSides) for a custom rank, from the stock rank-1 pair.
+
+    CalcValue (SpellInfo.cpp:429-445) turns the pair into a value three different ways, so this
+    does too rather than pretending one formula covers all of them:
+
+        DieSides 0  -> the value is BasePoints exactly
+        DieSides 1  -> the value is BasePoints + 1, a fixed number
+        DieSides N  -> the value is BasePoints + irand(1, N), i.e. BasePoints+1 .. BasePoints+N
+
+    Sanity check on the third case, which is the one the whole curve is anchored on:
+    Icy Touch stock is (126, 11) -> average 132, and at level 1 the ratio is 1/12, so
+    die = max(3, round(11/12)) = 3, average = 11, base = round(11 - 2) = 9 -> 10 to 12. That is
+    the record that is live on the realm today, reproduced by formula rather than by hand.
+    """
+    ratio = power(level) / power(handoff_level)
+    if stock_die_sides == 0:
+        return int(round(stock_base_points * ratio)), 0
+    if stock_die_sides == 1:
+        return int(round((stock_base_points + 1) * ratio)) - 1, 1
+    die = max(MIN_DIE_SIDES, int(round(stock_die_sides * ratio)))
+    avg = (stock_base_points + (stock_die_sides + 1) / 2.0) * ratio
+    return int(round(avg - (die + 1) / 2.0)), die
+
+
+@dataclass(frozen=True)
+class ScalingCell:
+    """One Spell.dbc value Blizzard re-ranks, named by its EffectBasePoints column.
+
+    `die_sides` is the paired EffectDieSides column, which is always the same index. Both are
+    read from the clone source at generate time; nothing about their stock values is written
+    down here, so a DBC that disagrees with this file is impossible rather than merely unlikely.
+    """
+
+    base_points: str
+    die_sides: str
+    what: str                       # for the generated comment, e.g. "Frost damage"
+
+
+def effect_cells(effect_index, what):
+    return ScalingCell(f"EffectBasePoints_{effect_index}", f"EffectDieSides_{effect_index}", what)
+
 
 @dataclass(frozen=True)
 class CustomRank:
-    """One generated Spell.dbc record and its SkillLineAbility row."""
+    """One generated Spell.dbc record and its SkillLineAbility row.
+
+    Deliberately carries NO cell values. Everything that ends up in the record other than the ID
+    and the level is computed by dkspells.py from the stock record it clones, so this object
+    cannot disagree with Spell.dbc.
+    """
 
     spell_id: int
     level: int                  # BaseLevel and SpellLevel; also the module's learn level
-    base_points: int            # EffectBasePoints_1 -- tooltip $m1 = base_points + 1
-    die_sides: int              # EffectDieSides_1   -- tooltip $M1 = base_points + die_sides
-    subtext: str                # NameSubtext_Lang_enUS, e.g. "Rank 1". Client display only.
+    rank_number: int            # position in the renumbered chain, 1-based
     sla_id: int
-    superceded_by: int          # SkillLineAbility.SupercededBySpell
-    # AcquireMethod 2 = SKILL_LINE_ABILITY_LEARNED_ON_SKILL_LEARN (DBCEnums.h:359). Exactly ONE
-    # row per supercede chain may carry it: Player.cpp:12284-12300 sets skipCurrent when the
-    # superseding row is also 2, so two would grant the HIGHER rank. Rank 1 carries it and gets
-    # a free reconcile at every login via _LoadSkills -> learnSkillRewardedSpells
-    # (Player.cpp:14081). Ranks 2+ must be 0, which is also mod-learn-spells' filter
-    # (mod_learnspells.cpp:446), so that module agrees with us instead of fighting us.
-    acquire_method: int = 2
+    superceded_by: int          # SkillLineAbility.SupercededBySpell -- the next rank
+    # AcquireMethod 2 = SKILL_LINE_ABILITY_LEARNED_ON_SKILL_LEARN (DBCEnums.h:361). It grants the
+    # spell AT CHARACTER CREATION and re-grants it at every login via _LoadSkills ->
+    # learnSkillRewardedSpells (Player.cpp:14081), with no level test anywhere in that path
+    # (Player.cpp:12237-12311 filters on race, class and MinSkillLineRank only). So it is correct
+    # for a rank whose level IS 1 and wrong for every other rank -- a level-2 Death Coil carrying
+    # AcquireMethod 2 would be in the spellbook at level 1. Ranks 2+ are 0, which is also
+    # mod-learn-spells' filter (mod_learnspells.cpp:446), so that module agrees with us instead
+    # of fighting us. Enforced by invariant #6, set by Ability.ranks, never by hand.
+    acquire_method: int = 0
 
     @property
-    def damage_min(self):
-        return self.base_points + 1
-
-    @property
-    def damage_max(self):
-        return self.base_points + self.die_sides
+    def subtext(self):
+        """NameSubtext_Lang_enUS. Client display only; `.spellinfo` is the sole server reader."""
+        return f"Rank {self.rank_number}"
 
 
 @dataclass(frozen=True)
 class Ability:
+    """One re-ranked ability: what to clone, where it starts, and which cells scale."""
+
     key: str
-    clone_from: int                    # stock Spell.dbc record to memcpy
-    skill_line: int                    # SkillLine.dbc id (771 = Frost, class skill)
+    name: str
+    clone_from: int                    # stock Spell.dbc record to memcpy == stock_chain[0]
+    skill_line: int                    # SkillLine.dbc id: 770 Blood, 771 Frost, 772 Unholy
     stock_chain: Tuple[int, ...]       # stock ranks, low to high, starting with clone_from
-    ranks: Tuple[CustomRank, ...]      # custom ranks, low to high, prepended to the chain
-    bonus: Tuple[float, float, float, float, str]   # spell_bonus_data row for each custom rank
-    # SkillLineAbility rows that already exist in the stock DBC and must be edited in place.
-    # {sla id: {column: new value}}
-    stock_sla_edits: Dict[int, Dict[str, int]] = field(default_factory=dict)
-    # Client-only NameSubtext rewrites on the stock ranks so the spellbook renumbers with the
-    # chain: 45477 is rank 2 once 90000 is rank 1. {spell id: new subtext}
-    stock_subtext: Dict[int, str] = field(default_factory=dict)
+    intro_level: int                   # the brief's level -- when rank 1 becomes available
+    handoff_level: int                 # BaseLevel of stock_chain[0]; asserted against Spell.dbc
+    scaling: Tuple[ScalingCell, ...]   # the cells Blizzard re-ranks, hence the cells we scale
+    # spell_bonus_data row shared by every custom rank, or None when the stock chain has no rows
+    # at all. SpellMgr::GetSpellBonusData (SpellMgr.cpp:947-961) falls back to the FIRST spell in
+    # the chain, and renumbering makes a custom rank the first spell -- so an ability whose stock
+    # ranks all carry explicit rows needs its custom ranks to carry them too, and an ability with
+    # no rows anywhere must not suddenly acquire one.
+    bonus: Optional[Tuple[float, float, float, float, str]] = None
+    # spell_script_names entries keyed on the stock chain. See SCRIPT_REBIND_WHY.
+    scripts: Tuple[str, ...] = ()
+    # Cells that are NOT scaled but must still be overridden on every clone. Today this is only
+    # Horn of Winter's SpellInfoCorrections bake -- see HORN_OF_WINTER below.
+    extra_overrides: Dict[str, int] = field(default_factory=dict)
+    # False for a chain nobody learns and the module never grants: no SkillLineAbility rows, no
+    # progression entry, no handoff grant. It exists only so its RANK NUMBERS keep matching
+    # something else's. See MIRROR_CHAINS_WHY.
+    learnable: bool = True
+    mirror_of: Optional[str] = None    # the ability whose rank count this chain must equal
+
+    @property
+    def rank_levels(self) -> Tuple[int, ...]:
+        """intro, intro+6, ... while still below the stock rank. Never empty."""
+        levels, lvl = [], self.intro_level
+        while lvl < self.handoff_level:
+            levels.append(lvl)
+            lvl += RANK_STEP
+        assert levels, f"{self.key}: intro level {self.intro_level} is not below the stock rank"
+        return tuple(levels)
+
+    @property
+    def ranks(self) -> Tuple[CustomRank, ...]:
+        levels = self.rank_levels
+        ids = [spell_id_for(self.key, i) for i in range(len(levels))]
+        chain = ids + list(self.stock_chain)
+        return tuple(
+            CustomRank(
+                spell_id=ids[i],
+                level=levels[i],
+                rank_number=i + 1,
+                sla_id=sla_id_for(ids[i]),
+                superceded_by=chain[i + 1],
+                # See CustomRank.acquire_method. Only a rank that is genuinely available at
+                # character creation may carry 2, and "available at character creation" means
+                # level 1 -- there is no level field on SkillLineAbility to say anything else.
+                acquire_method=2 if levels[i] == 1 else 0,
+            )
+            for i in range(len(levels))
+        )
 
     @property
     def chain(self):
         """Full renumbered chain, low to high. Rank N is chain[N-1]; first_spell_id = chain[0]."""
         return tuple(r.spell_id for r in self.ranks) + self.stock_chain
 
+    @property
+    def stock_subtext(self) -> Dict[int, str]:
+        """Client-only NameSubtext rewrite so the spellbook renumbers with the chain.
+
+        45477 is rank 10 once nine custom ranks sit below it. Computed, never listed: a
+        hand-written map silently goes stale the moment a rank is added or removed.
+        """
+        n = len(self.ranks)
+        return {sid: f"Rank {n + i + 1}" for i, sid in enumerate(self.stock_chain)}
+
+
+# WHY THE spell_script_names ROWS HAVE TO MOVE, AND WHY THEY BECOME POSITIVE
+# --------------------------------------------------------------------------
+# `spell_script_names.spell_id < 0` means "this script, for every rank of this chain", and
+# ObjectMgr::LoadSpellScriptNames (ObjectMgr.cpp:6377-6390) implements it as:
+#
+#     if (sSpellMgr->GetFirstSpellInChain(spellId) != uint32(spellId)) { LOG_ERROR(...); continue; }
+#     while (spellInfo) { insert(spellInfo->Id, script); spellInfo = spellInfo->GetNextRankSpell(); }
+#
+# Renumbering a chain moves its first spell. The instant 90060 becomes rank 1 of Death Coil, the
+# stock row `-47541 spell_dk_death_coil` fails that test and is DROPPED ENTIRELY -- not just for
+# the new ranks, for EVERY rank, including the level-80 Death Coil the existing Death Knights on
+# this realm cast. Death Coil's Effect_1 is SPELL_EFFECT_DUMMY and the script is the only thing
+# that turns it into damage, so losing it means the ability silently does nothing at all. Four of
+# the eight re-ranked abilities are in this position: Death and Decay (-43265), Death Coil
+# (-47541), Blood Boil (-48721) and Death Strike (-49998). Icy Touch got away with it in the
+# shipped slice only because it has no script row.
+#
+# The custom ranks need the script for the same reason, so the row has to be re-pointed either
+# way. It is re-pointed as ONE POSITIVE ROW PER SPELL rather than as a single `-90060`, and the
+# reason is blast radius: this feature ships behind a config flag and is expected to be turned
+# off and on. If its SQL is ever rolled back while the script row is not, `-90060` resolves to a
+# spell that no longer exists, LoadSpellScriptNames logs and `continue`s, and the whole chain --
+# including all five stock ranks -- loses its script. Positive rows degrade one spell at a time.
+# The unique key is (spell_id, ScriptName), so a re-run is a clean DELETE of exactly the rows
+# this generator owns followed by an INSERT of the same set.
+SCRIPT_REBIND_WHY = "chain renumbered; see SCRIPT_REBIND_WHY in tools/dk_spec.py"
+
+
+# THE ACQUIREMETHOD = 2 FLIPS
+# ---------------------------
+# Stock row 16231 is (16231, 771, 45477, 0, 32, 0, 0, 1, 49896, 2, 0, 0, 0, 0). AcquireMethod 2
+# means learnSkillRewardedSpells hands out the LEVEL 55 Icy Touch the instant a Death Knight
+# acquires skill 771, which is at character creation. Leave it at 2 and every new DK starts with
+# a 127-137 damage nuke and the feature is silently pointless.
+#
+# The set is DERIVED, not guessed, and invariant #21 re-derives it from the live database and the
+# stock DBC on every run: walk every SkillLineAbility row with AcquireMethod = 2 whose SkillLine
+# a class-6 character receives from playercreateinfo_skills at creation, keep the ones that pass
+# learnSkillRewardedSpells' race and class filters for a Death Knight (Player.cpp:12264-12274 --
+# note ClassMask 0 means NO filter, so a row does not have to be ClassMask 32 to fire), and keep
+# the ones whose spell has BaseLevel >= 2. That query returns exactly eight rows. Six are the
+# abilities this feature re-ranks or grants and are flipped to 0; the other two are on
+# AM2_WAIVERS with the reason they are left alone.
+STOCK_SLA_FLIPS = {
+    16231: (45477, "Icy Touch",      "re-ranked; custom rank 1 (90000) carries AcquireMethod 2"),
+    16238: (45462, "Plague Strike",  "re-ranked; custom rank 1 (90020) carries AcquireMethod 2"),
+    16616: (45902, "Blood Strike",   "re-ranked; custom rank 1 (90040) carries AcquireMethod 2"),
+    16433: (47541, "Death Coil",     "re-ranked, intro level 2 -- nothing in the chain may carry "
+                                     "AcquireMethod 2, which would grant it at level 1"),
+    17016: (48266, "Blood Presence", "granted as the stock spell by Reconcile() at level 1"),
+    17101: (49576, "Death Grip",     "granted as the stock spell by Reconcile() at level 4"),
+}
+
+# The other two rows the derivation finds. Both are hidden passives that are part of the Death
+# Knight scaffolding rather than abilities on the brief's table, and both are ClassMask 0 rows on
+# a DK-only skill line, i.e. exactly the shape that is easy to miss. Listed here so that invariant
+# #21 can insist every derived row is either flipped or waived ON PURPOSE, and so that a stock
+# data change that adds a ninth row fails the build instead of slipping through.
+AM2_WAIVERS = {
+    17035: (49410, "Forceful Deflection",
+            "hidden passive (SPELL_ATTR0_PASSIVE), converts Strength into parry rating. Not on "
+            "the brief's table, has no ranks, and a level-1 DK having it is stock behaviour for "
+            "every other stat passive the class gets for free."),
+    19641: (56816, "Rune Strike (passive)",
+            "hidden enabler aura for 56815 Rune Strike, SPELL_ATTR0_DO_NOT_DISPLAY so it is not "
+            "in the spellbook. It arms the after-a-dodge-or-parry window and does nothing at all "
+            "until 56815 itself is known, which Reconcile() grants at level 20. Flipping it would "
+            "mean re-granting it from the module for no visible difference."),
+}
+
+
+# What the SLA emitter actually applies. Module-level, not per-ability: the derivation above is
+# a property of the realm's creation data, not of any one ability, and emitting it from inside an
+# ability would mean either duplicating it or arbitrarily attaching six rows to one of them.
+STOCK_SLA_EDITS = {sla_id: {"AcquireMethod": 0} for sla_id in STOCK_SLA_FLIPS}
+
+
+# ------------------------------------------------------------------------- the eight clones --
 
 ICY_TOUCH = Ability(
-    key="icy_touch",
-    clone_from=45477,
-    skill_line=771,
+    key="icy_touch", name="Icy Touch", clone_from=45477, skill_line=771,
     stock_chain=(45477, 49896, 49903, 49904, 49909),
-    ranks=(
-        CustomRank(
-            spell_id=spell_id_for("icy_touch", 0),         # 90000
-            level=1,
-            # Calibrated against real level-1 content parsed out of Spell.dbc:
-            #   133 Fireball      R1  BP1=13 die1=9  -> 14-22 over a 1.5s cast
-            #    78 Heroic Strike R1  BP1=10 die1=1  -> +11 on a swing
-            # BP1=9 die1=3 -> 10-12, instant, 20 yd, plus Frost Fever's -14% attack speed.
-            base_points=9,
-            die_sides=3,
-            subtext="Rank 1",
-            sla_id=sla_id_for(spell_id_for("icy_touch", 0)),   # 22000
-            superceded_by=45477,
-            acquire_method=2,
-        ),
-    ),
-    # spell_bonus_data is per spell id with a first-rank fallback (SpellMgr.cpp:947-961). All
-    # five stock ranks have explicit rows, so renumbering first_spell_id cannot disturb them;
-    # only the new rank needs one. Values copied from the 45477 row.
+    intro_level=1, handoff_level=55,
+    scaling=(effect_cells(1, "Frost damage"),),
+    # Values copied from the stock 45477 row. All five stock ranks have explicit rows, so
+    # renumbering first_spell_id cannot disturb them; only the new ranks need one.
     bonus=(0.0, 0.0, 0.1, 0.0, "Death Knight - Icy Touch"),
-    stock_sla_edits={
-        # THE FLIP THE WHOLE FEATURE DEPENDS ON (DESIGN.md 3.5, risk 8.6). Stock row 16231 is
-        # (16231, 771, 45477, 0, 32, 0, 0, 1, 49896, 2, 0, 0, 0, 0) -- AcquireMethod 2 means
-        # learnSkillRewardedSpells hands out the LEVEL 55 Icy Touch the instant a Death Knight
-        # acquires skill 771, which is at character creation. Leave it at 2 and every new DK
-        # starts with a 127-137 damage nuke and the feature is silently pointless.
-        16231: {"AcquireMethod": 0},
-        # ...AND THE FIVE SIBLINGS. Flipping only 16231 was a real bug caught in review: it
-        # fixes Icy Touch and leaves the other five stock level-55 DK abilities auto-granted at
-        # character creation, so a level-1 DK would open the spellbook holding Plague Strike,
-        # Blood Strike, Blood Presence, Death Coil and Death Grip at full 55 power.
-        #
-        # The criterion is derived, not guessed. Of the 31 SkillLineAbility rows with
-        # AcquireMethod=2 whose skill a class-6 character receives at creation, 16 are
-        # DK-exclusive (ClassMask == 32) and of those exactly 6 grant a spell with
-        # BaseLevel >= 55. Those 6 are precisely the abilities this feature re-ranks:
-        #     16231 -> 45477 Icy Touch        16616 -> 45902 Blood Strike
-        #     16238 -> 45462 Plague Strike    17016 -> 48266 Blood Presence
-        #     16433 -> 47541 Death Coil       17101 -> 49576 Death Grip
-        #
-        # The other 10 DK-exclusive rows are BaseLevel 0/1 and MUST KEEP AcquireMethod=2 --
-        # they are the free scaffolding a DK is supposed to have: Runic Focus (61455), the
-        # Frost Fever holder (59921), Offensive State (45903), First Aid (10846), Sigil
-        # (52665), Command (54562), Journeyman Riding (33391) and the racials. The remaining
-        # 15 non-exclusive rows are shared weapon proficiencies (ClassMask 111, 431, 1535...);
-        # flipping those would silently break warriors, paladins and everyone else.
-        16238: {"AcquireMethod": 0},   # Plague Strike 45462
-        16433: {"AcquireMethod": 0},   # Death Coil    47541
-        16616: {"AcquireMethod": 0},   # Blood Strike  45902
-        17016: {"AcquireMethod": 0},   # Blood Presence 48266
-        17101: {"AcquireMethod": 0},   # Death Grip    49576
-    },
-    # Client-only. NameSubtext is parsed server-side (`s` in SpellEntryfmt) but the only thing
-    # that reads it is the `.spellinfo` GM command (cs_spellinfo.cpp:759), so no matching
-    # spell_dbc override row is emitted -- see MIRROR_STOCK_SUBTEXT_TO_SQL below.
-    stock_subtext={45477: "Rank 2", 49896: "Rank 3", 49903: "Rank 4",
-                   49904: "Rank 5", 49909: "Rank 6"},
+    # No spell_script_names row anywhere in the chain: Icy Touch is SPELL_EFFECT_SCHOOL_DAMAGE
+    # plus SPELL_EFFECT_TRIGGER_SPELL(55095 Frost Fever) and needs no script.
 )
 
-ABILITIES = (ICY_TOUCH,)
+PLAGUE_STRIKE = Ability(
+    key="plague_strike", name="Plague Strike", clone_from=45462, skill_line=772,
+    stock_chain=(45462, 49917, 49918, 49919, 49920, 49921),
+    intro_level=1, handoff_level=55,
+    # Effect_1 is SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL: a FLAT addition on top of Effect_2's 50%
+    # weapon damage. The 50% needs no scaling -- it already scales with the weapon.
+    scaling=(effect_cells(1, "bonus weapon damage"),),
+)
 
-# The five cells that differ between a custom rank and its clone source, BY NAME. Named rather
-# than by index so a core bump that reorders SpellEntryfmt is a loud failure instead of a
-# silent one; dkspells.py still asserts the resolved indices equal the ones DESIGN.md 3.3
-# documents (0 / 38 / 39 / 74 / 80).
-SPELL_OVERRIDE_COLUMNS = {
-    "ID": lambda rank: rank.spell_id,
-    "BaseLevel": lambda rank: rank.level,
-    "SpellLevel": lambda rank: rank.level,
-    "EffectDieSides_1": lambda rank: rank.die_sides,
-    "EffectBasePoints_1": lambda rank: rank.base_points,
+BLOOD_STRIKE = Ability(
+    key="blood_strike", name="Blood Strike", clone_from=45902, skill_line=770,
+    stock_chain=(45902, 49926, 49927, 49928, 49929, 49930),
+    intro_level=1, handoff_level=55,
+    scaling=(effect_cells(1, "bonus weapon damage"),),
+)
+
+DEATH_COIL = Ability(
+    key="death_coil", name="Death Coil", clone_from=47541, skill_line=772,
+    stock_chain=(47541, 49892, 49893, 49894, 49895),
+    intro_level=2, handoff_level=55,
+    # Effect_1 is SPELL_EFFECT_DUMMY and spell_dk_death_coil reads it with GetEffectValue()
+    # (spell_dk.cpp:1381) to decide the damage or the heal. Scaling it scales both.
+    scaling=(effect_cells(1, "Shadow damage"),),
+    scripts=("spell_dk_death_coil",),
+)
+
+DEATH_STRIKE = Ability(
+    key="death_strike", name="Death Strike", clone_from=49998, skill_line=772,
+    stock_chain=(49998, 49999, 45463, 49923, 49924),
+    intro_level=6, handoff_level=56,
+    # EffectBasePoints_1 is the flat bonus on top of Effect_2's 75% weapon damage.
+    # EffectBasePoints_3 is the Effect_3 dummy value Blizzard also re-ranks; the heal itself is
+    # NOT taken from it -- spell_dk_death_strike (spell_dk.cpp:1638) uses
+    # Effects[EFFECT_0].DamageMultiplier, a percentage of max health that is identical on all
+    # five stock ranks and therefore comes across untouched by the clone. _3 is scaled anyway,
+    # because the rule is "scale the cells Blizzard re-ranks" and applying it selectively is how
+    # a cell gets forgotten.
+    scaling=(effect_cells(1, "bonus weapon damage"),
+             effect_cells(3, "Effect_3 dummy (tooltip only)")),
+    scripts=("spell_dk_death_strike",),
+)
+
+BLOOD_BOIL = Ability(
+    key="blood_boil", name="Blood Boil", clone_from=48721, skill_line=770,
+    stock_chain=(48721, 49939, 49940, 49941),
+    intro_level=12, handoff_level=58,
+    scaling=(effect_cells(1, "Shadow damage"),),
+    bonus=(0.0, 0.0, 0.06, 0.0, "Death Knight - Blood Boil"),
+    scripts=("spell_dk_blood_boil",),
+)
+
+DEATH_AND_DECAY = Ability(
+    key="death_and_decay", name="Death and Decay", clone_from=43265, skill_line=772,
+    stock_chain=(43265, 49936, 49937, 49938),
+    intro_level=26, handoff_level=60,
+    # SPELL_EFFECT_PERSISTENT_AREA_AURA. spell_dk_death_and_decay_aura (spell_dk.cpp:378) feeds
+    # aurEff->GetAmount() into the 52212 trigger, so this is the per-second damage.
+    scaling=(effect_cells(1, "Shadow damage per second"),),
+    scripts=("spell_dk_death_and_decay",),
+)
+
+HORN_OF_WINTER = Ability(
+    key="horn_of_winter", name="Horn of Winter", clone_from=57330, skill_line=771,
+    stock_chain=(57330, 57623),
+    intro_level=18, handoff_level=65,
+    scaling=(effect_cells(1, "Strength"), effect_cells(2, "Agility")),
+    # THE ONE CLONE THAT LOSES SOMETHING, AND THE FIX.
+    #
+    # A clone keeps everything that is keyed on family/mask/icon, which is why cloning is the
+    # whole design. It does NOT keep anything the core hardcodes by spell ID. Grepping
+    # SpellInfoCorrections.cpp for every stock ID this feature clones returns exactly one hit:
+    #
+    #     // Horn of Winter, stacking issues
+    #     ApplySpellFix({ 57330, 57623 }, [](SpellInfo* spellInfo) {
+    #         spellInfo->Effects[EFFECT_1].TargetA = 0;
+    #         spellInfo->AttributesEx2 |= SPELL_ATTR2_IGNORE_LINE_OF_SIGHT;   // 0x4
+    #     });                                             -- SpellInfoCorrections.cpp:835-840
+    #
+    # Without it a cloned Horn of Winter re-applies its own party aura on top of itself. Both
+    # mutations are plain Spell.dbc cells, so they are baked into the clone instead: EFFECT_1's
+    # TargetA is ImplicitTargetA_2, and AttributesEx2 is stock 0 for both ranks, so the corrected
+    # value is 4. Invariant #22 re-greps the pinned core for every cloned ID and fails if a
+    # second ability ever grows a correction that is not baked or waived here.
+    extra_overrides={"ImplicitTargetA_2": 0, "AttributesEx2": 4},
+)
+
+# MIRROR_CHAINS_WHY -- THE OFF-HAND CHAINS, AND THE NULL DEREFERENCE THEY PREVENT
+# ------------------------------------------------------------------------------
+# Threat of Thassarian (a Frost talent) makes a dual-wielding Death Knight's strikes hit with the
+# off-hand too, and spell_dk_threat_of_thassarian does it like this (spell_dk.cpp:2862):
+#
+#     spellId = sSpellMgr->GetSpellWithRank(spellId, spellInfo->GetRank());
+#
+# -- take the RANK NUMBER of the main-hand spell that just landed and ask for the off-hand spell
+# with the same rank number. SpellMgr::GetSpellWithRank (SpellMgr.cpp:645-655) walks the chain:
+#
+#     return GetSpellWithRank(node->rank < rank ? node->next->Id : node->prev->Id, rank, strict);
+#
+# `node->next` is nullptr on the last rank and there is no check. Stock data never trips it
+# because the main-hand and off-hand chains are always the same length -- Death Strike 5 and 5,
+# Blood Strike 6 and 6. Renumbering the main-hand chain and not the off-hand one breaks exactly
+# that assumption, and the first level-80 Death Knight with Threat of Thassarian and an off-hand
+# weapon who lands a Death Strike SEGFAULTS THE WORLDSERVER. Not a tooltip bug, a crash, on a
+# realm with people on it.
+#
+# So the two off-hand chains that have a chain at all get the same nine ranks prepended, scaled by
+# the same curve from their own stock rank 1 (which is roughly half the main-hand value -- that is
+# what an off-hand hit is). Rank k on one side keeps meaning rank k on the other, at every level,
+# which is the property the core script actually relies on.
+#
+# Plague Strike (66216) and Rune Strike (66217) need nothing: they have no spell_ranks chain at
+# all, so GetSpellWithRank finds no node and hands back rank 1 unchanged, exactly as it does
+# today. Frost Strike (66196) and Obliterate (66198) have chains but their main-hand spells are
+# not re-ranked by this feature, so their rank counts still match.
+#
+# These two are NOT abilities. They are never learned, never granted, have no SkillLineAbility
+# rows and never appear in the progression table -- learnable=False. They exist so that a number
+# in one table keeps matching a number in another.
+
+DEATH_STRIKE_OFFHAND = Ability(
+    key="death_strike_offhand", name="Death Strike (off-hand)", clone_from=66188,
+    skill_line=772, stock_chain=(66188, 66950, 66951, 66952, 66953),
+    intro_level=DEATH_STRIKE.intro_level, handoff_level=DEATH_STRIKE.handoff_level,
+    scaling=(effect_cells(1, "bonus off-hand weapon damage"),),
+    learnable=False, mirror_of="death_strike",
+)
+
+BLOOD_STRIKE_OFFHAND = Ability(
+    key="blood_strike_offhand", name="Blood Strike (off-hand)", clone_from=66215,
+    skill_line=770, stock_chain=(66215, 66975, 66976, 66977, 66978, 66979),
+    intro_level=BLOOD_STRIKE.intro_level, handoff_level=BLOOD_STRIKE.handoff_level,
+    scaling=(effect_cells(1, "bonus off-hand weapon damage"),),
+    learnable=False, mirror_of="blood_strike",
+)
+
+ABILITIES = (ICY_TOUCH, PLAGUE_STRIKE, BLOOD_STRIKE, DEATH_COIL, DEATH_STRIKE,
+             BLOOD_BOIL, DEATH_AND_DECAY, HORN_OF_WINTER,
+             DEATH_STRIKE_OFFHAND, BLOOD_STRIKE_OFFHAND)
+
+LEARNABLE_ABILITIES = tuple(a for a in ABILITIES if a.learnable)
+
+# Stock IDs whose SpellInfoCorrections entry is deliberately NOT baked into the clone, with the
+# reason. Empty today: Horn of Winter is the only cloned ability with a correction and it is
+# baked. Kept so invariant #22 has somewhere to point when the next one appears.
+CORRECTION_WAIVERS: Dict[int, str] = {}
+
+
+# ------------------------------------------------------------ the twenty stock-spell grants --
+#
+# (level, spell id, name, why no custom rank). Reconcile() calls learnSpell on these at the
+# level given; the record the player gets is Blizzard's own, unmodified, which is why "clean
+# handoff at 55" is trivially true for all of them -- there is nothing to hand over from.
+
+FLAT_GRANTS = (
+    (1,  48266, "Blood Presence",      "flat percentages: +15% damage, heal for a % of damage "
+                                       "dealt. Identical at level 1 and level 80."),
+    (4,  49576, "Death Grip",          "a pull and a taunt. No magnitude to scale."),
+    (8,  47528, "Mind Freeze",         "an interrupt plus a school lockout duration."),
+    (10, 50842, "Pestilence",          "spreads existing diseases; deals no damage of its own."),
+    (14, 45524, "Chains of Ice",       "-95% movement, a percentage."),
+    (16, 56222, "Dark Command",        "a taunt."),
+    (20, 56815, "Rune Strike",         "150% weapon damage plus an attack-power term. Scales with "
+                                       "the weapon and with AP, so it is level-correct already."),
+    (20, 48263, "Frost Presence",      "flat percentages: +stamina %, +armour %, -damage taken %."),
+    (22, 48792, "Icebound Fortitude",  "-30% damage taken plus a defense-rating term."),
+    (24, 48707, "Anti-Magic Shell",    "absorbs 75% of magic damage up to 50% of health. Both "
+                                       "percentages."),
+    (28, 46584, "Raise Dead",          "summons a ghoul; Guardian::InitStatsForLevel scales it to "
+                                       "the owner, so the summon is level-correct by itself."),
+    (30, 3714,  "Path of Frost",       "water walking. Boolean."),
+    (32, 45529, "Blood Tap",           "converts a Blood rune to a Death rune."),
+    (34, 47476, "Strangulate",         "a 5 second silence."),
+    (36, 48743, "Death Pact",          "heals 40% of max health. A percentage."),
+    (38, 48265, "Unholy Presence",     "flat percentages: +attack speed %, +movement %, -GCD."),
+    (40, 47568, "Empower Rune Weapon", "refreshes all runes and grants 25 runic power."),
+    (45, 42650, "Army of the Dead",    "summons eight ghouls that scale to the owner. A ten "
+                                       "minute cooldown channelled cost, not a number."),
+)
+
+# The brief's level 18 entry, Horn of Winter, is deliberately NOT here: it is one of the eight
+# re-ranked abilities (HORN_OF_WINTER above), because +86 Strength and Agility -- the level-65
+# value -- would roughly double a level-18 character's Strength.
+
+# ------------------------------------------------------------------------ the 55+ handoff ----
+#
+# The last custom rank of each re-ranked ability is superseded by the first STOCK rank, and this
+# is what puts the character on it. Granting it from the module rather than leaving it to
+# mod-learn-spells is the difference between a handoff and a dependency: DESIGN.md 4 is explicit
+# that mod-learn-spells is redundancy, not a requirement, and with it disabled a level-55 Death
+# Knight would otherwise keep the level-49 custom rank for the rest of the game.
+#
+# Only the FIRST stock rank is granted. Everything above it (Icy Touch rank 11 at 61, and so on)
+# is left to whatever grants stock ranks on this realm today -- trainers or mod-learn-spells --
+# because that is unchanged by this feature and equally true of every DK ability that was never
+# re-ranked. Nothing here is typed in: the level is the handoff level, asserted against
+# Spell.dbc BaseLevel by invariant #17.
+
+def handoff_grants() -> List[Tuple[int, int]]:
+    return sorted((a.handoff_level, a.stock_chain[0]) for a in LEARNABLE_ABILITIES)
+
+
+# ------------------------------------------------------- what a clone is allowed to differ in --
+
+# The three cells every custom rank overrides regardless of ability. Everything else that changes
+# comes from Ability.scaling and Ability.extra_overrides, and NameSubtext_Lang_enUS is set
+# separately because it is a string.
+FIXED_OVERRIDE_COLUMNS = {
+    "ID": lambda rank, ability: rank.spell_id,
+    "BaseLevel": lambda rank, ability: rank.level,
+    "SpellLevel": lambda rank, ability: rank.level,
 }
+
+# Named rather than by index so a core bump that reorders SpellEntryfmt is a loud failure instead
+# of a silent one; dkspells.py asserts the resolved indices equal the ones DESIGN.md 3.3
+# documents. Only the five the shipped slice used are pinned -- those are the ones a human has
+# checked against the file by hand.
 DOCUMENTED_OVERRIDE_INDICES = {"ID": 0, "BaseLevel": 38, "SpellLevel": 39,
                                "EffectDieSides_1": 74, "EffectBasePoints_1": 80}
 
-# NameSubtext_Lang_enUS is set from the spec too, but for rank 1 it resolves to the string the
-# clone source already holds ("Rank 1"), so add_string() reuses the existing offset and the
-# record stays byte-identical to the clone apart from the five overrides above. dkspells.py
-# asserts that no-op rather than assuming it.
+# NameSubtext_Lang_enUS is set from the spec too. For a rank whose subtext is the one the clone
+# source already carries ("Rank 1") it resolves to the same string-block offset and the record
+# stays byte-identical to the clone apart from the value cells; dkspells.py asserts that rather
+# than assuming it, and counts the cell against the override budget for every other rank.
 SUBTEXT_COLUMN = "NameSubtext_Lang_enUS"
 
-# Emitting spell_dbc override rows for the five stock ranks would keep `.spellinfo` in step
-# with the renumbered client subtexts, at the cost of five more 234-column rows in the
-# migration. DESIGN.md A3 specifies exactly one spell_dbc row, so this ships off. Turning it
-# on needs no other change: the emitter, invariant #4 and --check all follow this flag.
+# Emitting spell_dbc override rows for the stock ranks would keep `.spellinfo` in step with the
+# renumbered client subtexts, at the cost of thirty-seven more 234-column rows in the migration
+# for a field whose only server-side reader is a GM command (cs_spellinfo.cpp:759). Off. Turning
+# it on needs no other change: the emitter, invariant #4 and --check all follow this flag.
 MIRROR_STOCK_SUBTEXT_TO_SQL = False
-
-# Future ranks, for when the full progression ships (DESIGN.md 3.2). Not used by the slice;
-# kept here so the curve lives with the data it describes rather than in a comment somewhere.
-FULL_PROGRESSION_LEVELS = (1, 7, 13, 19, 25, 31, 37, 43, 49)
-
-
-def curve(level, low_avg=9.5, high_avg=132.0, top_level=55):
-    """(base_points, die_sides) for a rank learned at `level`, DESIGN.md 3.2."""
-    avg = round(low_avg + (high_avg - low_avg) * (level - 1) / (top_level - 1))
-    die = max(1, round(0.08 * avg))
-    return int(round(avg - (die + 1) / 2)), int(die)
 
 
 # --------------------------------------------------------- character creation (A7 - A10) --
@@ -461,15 +875,39 @@ UTILITY_SPELLS = (
 )
 
 
+GRANT_CUSTOM = "custom"         # a generated low rank
+GRANT_FLAT = "flat"             # a stock spell with nothing to scale
+GRANT_HANDOFF = "handoff"       # the first stock rank of a re-ranked ability
+
+
+def progression_entries() -> List[Tuple[int, int, str, str]]:
+    """[(level, spell id, kind, comment)], sorted by level then spell id.
+
+    The three kinds are all `learnSpell(id)` to Reconcile() and differ only in where the id came
+    from, but the generated header labels them, because "why does this level-45 entry point at a
+    stock Blizzard spell id" is the first question anyone reading it will have.
+    """
+    out = []
+    for a in LEARNABLE_ABILITIES:
+        for r in a.ranks:
+            out.append((r.level, r.spell_id, GRANT_CUSTOM, f"{a.name} ({r.subtext})"))
+    for level, sid, name, _why in FLAT_GRANTS:
+        out.append((level, sid, GRANT_FLAT, f"{name} -- stock spell, nothing to scale"))
+    for a in LEARNABLE_ABILITIES:
+        out.append((a.handoff_level, a.stock_chain[0], GRANT_HANDOFF,
+                    f"{a.name} (Rank {len(a.ranks) + 1}) -- stock {a.stock_chain[0]}, "
+                    f"the 55+ handoff"))
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
+
+
 def progression_grants() -> List[Tuple[int, int]]:
-    """[(level, spell id)] for every custom rank, sorted by level then id.
+    """[(level, spell id)] for the whole progression, sorted by level then id.
 
     This is what becomes kDkProgression[] in the generated header. Reconcile() walks it in
     order and breaks on the first entry above the player's level, so the sort is load-bearing.
     """
-    out = [(r.level, r.spell_id) for a in ABILITIES for r in a.ranks]
-    out.sort()
-    return out
+    return [(level, sid) for level, sid, _kind, _c in progression_entries()]
 
 
 def all_custom_spell_ids() -> List[int]:
@@ -477,7 +915,7 @@ def all_custom_spell_ids() -> List[int]:
 
 
 def all_custom_sla_ids() -> List[int]:
-    return sorted(r.sla_id for a in ABILITIES for r in a.ranks)
+    return sorted(r.sla_id for a in LEARNABLE_ABILITIES for r in a.ranks)
 
 
 def rank_by_spell_id(spell_id) -> Optional[CustomRank]:
@@ -486,3 +924,49 @@ def rank_by_spell_id(spell_id) -> Optional[CustomRank]:
             if r.spell_id == spell_id:
                 return r
     return None
+
+
+def ability_by_spell_id(spell_id) -> Optional[Ability]:
+    for a in ABILITIES:
+        if any(r.spell_id == spell_id for r in a.ranks):
+            return a
+    return None
+
+
+def _self_check():
+    """Cheap structural assertions that need no DBC and no database.
+
+    Everything here is a property of this file alone, so it is checked on import rather than
+    from a --check pass: a spec that cannot even describe itself consistently must not be able
+    to reach the emitter.
+    """
+    for a in ABILITIES:
+        assert a.key in ABILITY_BLOCKS, f"{a.key} has no reserved ID block"
+        assert len(a.ranks) <= IDS_PER_ABILITY, (
+            f"{a.key}: {len(a.ranks)} ranks does not fit in a {IDS_PER_ABILITY}-ID block")
+        assert a.clone_from == a.stock_chain[0], f"{a.key}: clone source is not stock rank 1"
+        assert a.intro_level >= 1
+    blocks = [ABILITY_BLOCKS[a.key] for a in ABILITIES]
+    assert len(set(blocks)) == len(blocks), "two abilities share an ID block"
+    ids = [sid for _l, sid, _k, _c in progression_entries()]
+    assert len(set(ids)) == len(ids), (
+        "a spell id is granted twice by the progression table: "
+        + str(sorted({i for i in ids if ids.count(i) > 1})))
+    flat = {sid for _l, sid, _n, _w in FLAT_GRANTS}
+    reranked = {s for a in ABILITIES for s in a.chain}
+    assert not (flat & reranked), (
+        f"granted as both a flat stock spell and part of a re-ranked chain: {flat & reranked}")
+    by_key = {a.key: a for a in ABILITIES}
+    for a in ABILITIES:
+        if not a.mirror_of:
+            continue
+        principal = by_key[a.mirror_of]
+        # The whole reason the mirror exists: GetSpellWithRank walks the off-hand chain by the
+        # MAIN-HAND rank number and dereferences node->next without a null check.
+        assert len(a.chain) == len(principal.chain), (
+            f"{a.key} has {len(a.chain)} ranks, {principal.key} has {len(principal.chain)} -- "
+            "spell_dk_threat_of_thassarian will walk off the end of the shorter one")
+        assert not a.learnable, f"{a.key} mirrors {a.mirror_of} and must not be granted"
+
+
+_self_check()

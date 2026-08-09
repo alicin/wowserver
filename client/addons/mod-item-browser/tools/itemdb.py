@@ -4,6 +4,8 @@
     ./itemdb.py                      emit ItemBrowser/Data/* (needs the live world DB, read-only)
     ./itemdb.py --check              re-verify the already-generated files, no writes
     ./itemdb.py --icon-check DIR     probe every icon name against a client's Data/ MPQ chain
+    ./itemdb.py --ac-src DIR         cross-check the proficiency table against a core checkout
+    ./itemdb.py --dump-rows FILE     write the raw SELECT as TSV for tools/selftest.lua
 
 WHY THIS TOOL EXISTS
 --------------------
@@ -17,32 +19,64 @@ Emits, deterministically and idempotently, into <addon>/Data/:
     Data.xml        <Script> load order; the .toc references only this file, so adding or
                     removing a shard never requires touching the hand-written .toc
     Icons.lua       the distinct Interface\\Icons\\ names, once each (4.8k, not 46k)
+    Filters.lua     everything the auction-house-style filter bar needs that is NOT per row:
+                    category and subcategory LABELS, the per-category row counts, the pooled
+                    class/race/skill restrictions, and the weapon/armour proficiency map
     Items_NN.lua    the sharded rows
     Meta.lua        row count, shard count and a content digest -- what the addon prints in
                     /ib status and what you compare when a friend's results look wrong
 
 WHERE THE DATA COMES FROM
 -------------------------
-Everything except the icon comes from acore_world.item_template. The icon does NOT live in
-item_template: item_template.displayid indexes ItemDisplayInfo.dbc, whose field 5 is
-inventoryIcon[0]. That DBC is read straight off /srv/wow/data/dbc; it is never written.
+Everything per-item comes from acore_world.item_template except the icon: item_template.displayid
+indexes ItemDisplayInfo.dbc, whose field 5 is inventoryIcon[0].
 
-Database access is one read-only SELECT path. This tool never writes to any database and never
-writes outside the addon's own Data/ directory.
+The category NAMES are not invented here and are not copied out of ItemTemplate.h's enums
+either. They are read from the client's own ItemClass.dbc (field 3, ClassName_lang[enUS]) and
+ItemSubClass.dbc (field 10 DisplayName_lang, field 27 VerboseName_lang), which is exactly where
+the stock auction house gets the strings in its category dropdowns. VerboseName wins when it
+exists, because DisplayName alone is ambiguous -- weapon subclasses 0 and 1 are both "Axe", and
+the AH shows "One-Handed Axes" / "Two-Handed Axes". Skill names come from SkillLine.dbc field 3,
+which is the same string the client's GetSkillLineInfo() hands back to the addon.
+
+All DBCs are read straight off /srv/wow/data/dbc; none of them is ever written.
+
+Database access is one read-only SELECT path -- which is why --dump-rows lives here rather
+than in the test script: the harness needs the same rows and there should be exactly one place
+that talks to the database. This tool never writes to any database, and never writes outside
+the addon's own Data/ directory except to the file --dump-rows names.
 
 RECORD PACKING
 --------------
-Six small fields are packed into ONE Lua number per item rather than six parallel arrays:
+Seven small fields are packed into ONE Lua number per item rather than seven parallel arrays:
 
-    meta = quality + 16*(invtype + 32*(class + 32*(subclass + 32*(reqlevel + 128*itemlevel))))
+    meta = quality + 16*(invtype + 32*(class + 32*(subclass + 32*(reqlevel
+                   + 128*(itemlevel + 512*restrict)))))
 
 Two reasons, both measured against the live table (see FIELD_WIDTHS for the live maxima):
-  * ~640 KB smaller on disk, and three fewer 46k-element Lua tables in the client's heap.
-  * The UI only ever decodes the ~15 rows it is drawing, so the arithmetic is free. Search
-    touches the name array only.
-The pack uses multiplication, not bit.bor: WoW's LuaBitOp is 32-bit and this record needs 35
+  * ~640 KB smaller on disk, and several fewer 46k-element Lua tables in the client's heap.
+  * The UI only ever decodes the ~13 rows it is drawing, and the filter scan pulls the fields
+    it needs straight out of the number with two arithmetic ops apiece. Search touches the
+    name array only.
+The pack uses multiplication, not bit.bor: WoW's LuaBitOp is 32-bit and this record needs 46
 bits. Lua numbers are doubles, so integers up to 2^53 are exact -- the largest value this
-scheme can produce is ~3.4e10.
+scheme can produce is ~7.0e13.
+
+`restrict` is the MOST significant field on purpose. It is a 1-based index into a pool of the
+distinct (AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank) tuples, and 0 means
+"no restriction at all" -- true of 32,567 of the 46,098 rows, whose packed number is therefore
+byte-for-byte what it was before the field existed. Only the restricted minority pays the extra
+digits.
+
+WHAT "USABLE" MEANS
+-------------------
+The filter bar's Usable checkbox mirrors the auction house's, which is server-side
+AuctionHouseUsablePlayerInfo::PlayerCanUseItem (src/server/game/AuctionHouse/
+AuctionHouseSearcher.cpp:663). That function checks, in order: the weapon/armour proficiency
+skill implied by class+subclass, AllowableClass, AllowableRace, RequiredSkill/RequiredSkillRank,
+RequiredSpell, and RequiredLevel. Everything except RequiredSpell can be evaluated in the
+client, so everything except RequiredSpell is shipped; see the addon's Search.lua for what it
+does with it.
 
 GENERATOR INVARIANTS
 --------------------
@@ -69,6 +103,15 @@ Every one is a hard failure in both --emit and --check.
       well-formed XML. WoW skips a malformed .xml silently.
   #10 no item name contains a raw '|' or a control character. '|' is the UI's escape
       introducer; a name carrying one would corrupt every coloured string it lands in.
+  #11 every (class, subclass) pair that occurs in the rows has a label, no label is empty,
+      and no label carries a '|' or a control character -- same reason as #10, these strings
+      go straight into dropdown buttons.
+  #12 the restriction pool round-trips: index 0 is exactly (-1, -1, 0, 0), the pool holds no
+      duplicates, and unpacking every row's index reproduces the four values the DB gave.
+  #13 the weapon/armour proficiency table equals the one ItemTemplate.h::GetSkill() builds in
+      the pinned core, and every skill id anything references resolves in SkillLine.dbc.
+      The core comparison is SKIPPED -- loudly -- when no checkout is at --ac-src, because
+      .work/ is gitignored and a fresh clone does not have one.
 """
 
 import argparse
@@ -87,6 +130,7 @@ REPO_ROOT = os.path.abspath(os.path.join(TOOLS_DIR, "..", "..", "..", ".."))
 
 DEFAULT_DBC_DIR = "/srv/wow/data/dbc"
 DEFAULT_CLIENT_DATA = "/home/ali/games/wow-3.3.5a/ChromieCraft_3.3.5a/Data"
+DEFAULT_AC_SRC = os.path.join(REPO_ROOT, ".work", "ac-src")
 DEFAULT_SHARD_ROWS = 6000
 DEFAULT_MAX_FILE_BYTES = 1_500_000
 
@@ -109,13 +153,19 @@ FALLBACK_ICON = "INV_Misc_QuestionMark"
 # roomier than the live maxima; invariant #2 fails loudly if the data ever outgrows one,
 # which is the signal to widen it here and regenerate rather than to truncate in silence.
 FIELD_WIDTHS = [
-    ("quality",   16,   7),    # Quality        0..7
-    ("invtype",   32,  28),    # InventoryType  0..28
-    ("class",     32,  16),    # class          0..16
-    ("subclass",  32,  20),    # subclass       0..20
-    ("reqlevel", 128, 100),    # RequiredLevel  0..100
-    ("itemlevel", 512, 435),   # ItemLevel      0..435
+    ("quality",   16,    7),   # Quality        0..7
+    ("invtype",   32,   28),   # InventoryType  0..28
+    ("class",     32,   16),   # class          0..16
+    ("subclass",  32,   20),   # subclass       0..20
+    ("reqlevel", 128,  100),   # RequiredLevel  0..100
+    ("itemlevel", 512,  435),  # ItemLevel      0..435
+    ("restrict", 2048,  727),  # index into the restriction pool, 0 = unrestricted
 ]
+
+# The one tuple that means "anybody, no skill". Rows carrying it get restrict index 0 and are
+# never written into the pool, which is 32,567 of the 46,098 rows and keeps their packed
+# number identical to what it was before the field existed.
+UNRESTRICTED = (-1, -1, 0, 0)
 
 
 def pack_meta(values):
@@ -165,7 +215,18 @@ class Db:
 
 ITEM_QUERY = (
     "SELECT entry, displayid, Quality, ItemLevel, RequiredLevel, class, subclass, "
-    "InventoryType, name FROM item_template ORDER BY entry"
+    "InventoryType, AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank, name "
+    "FROM item_template ORDER BY entry"
+)
+ITEM_QUERY_COLUMNS = 13
+
+# What --dump-rows writes for tools/selftest.lua. Deliberately a SEPARATE column order from
+# ITEM_QUERY: the harness exists to catch a wrong column being written into the addon, and it
+# cannot do that if it reads the same tuple in the same order.
+ITEM_TRUTH_QUERY = (
+    "SELECT entry, class, subclass, Quality, ItemLevel, RequiredLevel, InventoryType, "
+    "AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank, requiredspell, name "
+    "FROM item_template ORDER BY entry"
 )
 
 
@@ -223,6 +284,175 @@ def normalise_icon(raw):
 
 
 # ==========================================================================================
+# category labels: ItemClass.dbc, ItemSubClass.dbc, SkillLine.dbc
+# ==========================================================================================
+#
+# All three are plain all-uint32 WDBCs whose string fields are offsets into the trailing string
+# block. Each loader asserts the record shape it expects, for the same reason load_item_icons
+# does: a different client build that shifted a column would otherwise ship 46k plausible rows
+# labelled with the wrong words.
+
+def read_dbc(path, field_count, record_size):
+    """-> (list of tuples, string-resolver). Hard-fails on an unexpected record shape."""
+    with open(path, "rb") as fh:
+        blob = fh.read()
+    magic, rec_count, fields, rec_size, str_size = struct.unpack_from("<4sIIII", blob, 0)
+    if magic != b"WDBC":
+        raise Fail(f"{path}: not a WDBC file ({magic!r})")
+    if len(blob) != 20 + rec_count * rec_size + str_size:
+        raise Fail(f"{path}: header/size mismatch")
+    if (fields, rec_size) != (field_count, record_size):
+        raise Fail(f"{path}: expected {field_count} fields / {record_size} byte records, "
+                   f"got {fields} / {rec_size}")
+    strings = blob[20 + rec_count * rec_size:]
+
+    def read_string(off):
+        if off == 0 or off >= len(strings):
+            return ""
+        end = strings.index(b"\x00", off)
+        return strings[off:end].decode("latin-1")
+
+    records = [struct.unpack_from(f"<{fields}I", blob, 20 + i * rec_size)
+               for i in range(rec_count)]
+    return records, read_string
+
+
+def load_class_names(dbc_dir):
+    """class id -> label, from ItemClass.dbc field 3 (ClassName_lang[enUS])."""
+    # 20 fields: 0 ID, 1 subclass-map, 2 flags, 3..18 ClassName_lang, 19 locale mask.
+    records, text = read_dbc(os.path.join(dbc_dir, "ItemClass.dbc"), 20, 80)
+    return {rec[0]: text(rec[3]) for rec in records}
+
+
+def load_subclass_names(dbc_dir):
+    """(class, subclass) -> label, from ItemSubClass.dbc.
+
+    44 fields: 0 ClassID, 1 SubClassID, 2..9 proficiency/animation, 10..26 DisplayName_lang,
+    27..43 VerboseName_lang. The auction house shows the VERBOSE name where there is one --
+    DisplayName calls weapon subclasses 0 and 1 both "Axe", which is useless in a dropdown.
+    """
+    records, text = read_dbc(os.path.join(dbc_dir, "ItemSubClass.dbc"), 44, 176)
+    out = {}
+    for rec in records:
+        verbose, display = text(rec[27]), text(rec[10])
+        out[(rec[0], rec[1])] = verbose or display
+    return out
+
+
+def load_player_bits(dbc_dir):
+    """-> ({CLASS TOKEN: class id}, {RACE TOKEN: race id}).
+
+    AllowableClass / AllowableRace are bitmasks over these ids: class N is bit N-1. The tokens
+    are the strings the client's own UnitClass()/UnitRace() hand back as their second return --
+    ChrClasses.dbc field 55 is literally "WARRIOR", and ChrRaces.dbc field 11 is literally
+    "Scourge", which is what UnitRace says for an undead. Keyed upper-case so the addon can
+    match without caring about either side's capitalisation.
+    """
+    classes, class_text = read_dbc(os.path.join(dbc_dir, "ChrClasses.dbc"), 60, 240)
+    races, race_text = read_dbc(os.path.join(dbc_dir, "ChrRaces.dbc"), 69, 276)
+    class_bits = {class_text(rec[55]).upper(): rec[0] for rec in classes if class_text(rec[55])}
+    race_bits = {race_text(rec[11]).upper(): rec[0] for rec in races if race_text(rec[11])}
+    for name, table, limit in (("ChrClasses", class_bits, 32), ("ChrRaces", race_bits, 32)):
+        if not table:
+            raise Fail(f"{name}.dbc yielded no tokens")
+        if max(table.values()) > limit:
+            raise Fail(f"{name}.dbc has id {max(table.values())}, past bit {limit}")
+    return class_bits, race_bits
+
+
+def load_skill_names(dbc_dir):
+    """skill id -> label, from SkillLine.dbc field 3 (DisplayName_lang[enUS]).
+
+    This is the string the client's own GetSkillLineInfo() returns for a line in the player's
+    skill list, which is how the addon decides whether the player has a proficiency.
+    """
+    # 56 fields: 0 ID, 1 category, 2 costs, 3..19 DisplayName_lang, 20..36 Description_lang,
+    # 37 spellIcon, 38..54 AlternateVerb_lang, 55 canLink.
+    records, text = read_dbc(os.path.join(dbc_dir, "SkillLine.dbc"), 56, 224)
+    return {rec[0]: text(rec[3]) for rec in records}
+
+
+# ==========================================================================================
+# weapon / armour proficiency
+# ==========================================================================================
+#
+# Copied VERBATIM from the pinned core, src/server/game/Entities/Item/ItemTemplate.h, the two
+# static arrays inside ItemTemplate::GetSkill() -- with the SkillType constants resolved from
+# src/server/shared/SharedDefines.h. Same treatment the DK generator gives DBCfmt.h strings:
+# the values live here so the tool works without a checkout, and check_proficiency() re-derives
+# them from the checkout and fails on any disagreement.
+#
+# GetSkill() is the FIRST thing PlayerCanUseItem tests, and it is the only part of "usable"
+# that a plain reading of the item row cannot give you: nothing in item_template says a mage
+# may not wear plate.
+WEAPON_SKILLS = [
+    44, 172, 45, 46, 54,       # Axes, Two-Handed Axes, Bows, Guns, Maces
+    160, 229, 43, 55, 0,       # Two-Handed Maces, Polearms, Swords, Two-Handed Swords, --
+    136, 0, 0, 473, 0,         # Staves, --, --, Fist Weapons, --
+    173, 176, 253, 226, 228,   # Daggers, Thrown, Assassination, Crossbows, Wands
+    356,                       # Fishing
+]
+ARMOR_SKILLS = [
+    0, 415, 414, 413, 293, 0, 433, 0, 0, 0, 0,
+    #  Cloth Leather Mail Plate    Shield
+]
+ITEM_CLASS_WEAPON = 2
+ITEM_CLASS_ARMOR = 4
+
+
+def proficiency_map():
+    """(class -> {subclass -> skill id}) for the subclasses that demand a proficiency."""
+    out = {}
+    for cls, table in ((ITEM_CLASS_WEAPON, WEAPON_SKILLS), (ITEM_CLASS_ARMOR, ARMOR_SKILLS)):
+        for subclass, skill in enumerate(table):
+            if skill:
+                out.setdefault(cls, {})[subclass] = skill
+    return out
+
+
+def _parse_c_array(text, name):
+    """The initialiser list of `const static uint32 <name>[...] = { ... };`, as tokens."""
+    match = re.search(re.escape(name) + r"\s*\[[^\]]*\]\s*=\s*\{(.*?)\}\s*;", text, re.S)
+    if not match:
+        raise Fail(f"could not find the {name}[] initialiser in the core checkout")
+    body = re.sub(r"//.*?$|/\*.*?\*/", "", match.group(1), flags=re.S | re.M)
+    return [tok.strip() for tok in body.split(",") if tok.strip()]
+
+
+def check_proficiency(ac_src):
+    """Invariant #13, core half. Returns a note for the log, or raises."""
+    header = os.path.join(ac_src, "src/server/game/Entities/Item/ItemTemplate.h")
+    shared = os.path.join(ac_src, "src/server/shared/SharedDefines.h")
+    if not (os.path.isfile(header) and os.path.isfile(shared)):
+        return None
+    with open(header, "r", encoding="utf-8", errors="replace") as fh:
+        header_text = fh.read()
+    with open(shared, "r", encoding="utf-8", errors="replace") as fh:
+        shared_text = fh.read()
+    skill_ids = {m.group(1): int(m.group(2))
+                 for m in re.finditer(r"\b(SKILL_[A-Z0-9_]+)\s*=\s*(\d+)", shared_text)}
+
+    def resolve(tokens, what):
+        values = []
+        for tok in tokens:
+            if tok == "0":
+                values.append(0)
+            elif tok in skill_ids:
+                values.append(skill_ids[tok])
+            else:
+                raise Fail(f"{what}: {tok!r} is not a SkillType constant in SharedDefines.h")
+        return values
+
+    for name, ours in (("item_weapon_skills", WEAPON_SKILLS),
+                       ("item_armor_skills", ARMOR_SKILLS)):
+        theirs = resolve(_parse_c_array(header_text, name), name)
+        if theirs != ours:
+            raise Fail(f"{name}[] in the core is {theirs}, this tool has {ours}. "
+                       f"Update the literal in itemdb.py and regenerate.")
+    return f"proficiency table matches {os.path.relpath(header, ac_src)} in {ac_src}"
+
+
+# ==========================================================================================
 # Lua emission
 # ==========================================================================================
 
@@ -252,6 +482,79 @@ def render_icons(icons):
     out = [BANNER, "-- Distinct Interface\\Icons\\ names. Rows reference these by index.\n",
            "ItemBrowserData.iconName = {\n"]
     out.append(wrap([lua_string(i) for i in icons], indent="  "))
+    out.append("}\n")
+    return "".join(out)
+
+
+def render_filters(categories, order, pool, prof, skill_names, class_bits, race_bits):
+    """Everything the filter bar needs that is not per-row.
+
+    categories: {class: {"name": str, "count": int,
+                         "sub": [(subclass, count, label), ...]}}
+    order:      class ids, ascending -- the order the dropdown lists them in
+    pool:       [(allowClass, allowRace, reqSkill, reqRank), ...], 1-based in Lua
+    """
+    out = [BANNER,
+           "-- Auction-house-style filter metadata.\n"
+           "--\n"
+           "-- Category labels come from the CLIENT's ItemClass.dbc / ItemSubClass.dbc, which is\n"
+           "-- where the stock auction house gets the strings in its own dropdowns. Only classes\n"
+           "-- and subclasses that at least one item actually uses are listed, so the menus never\n"
+           "-- offer a category that cannot return a row.\n",
+           "ItemBrowserData.categoryOrder = {\n"]
+    out.append(wrap([str(c) for c in order], indent="  "))
+    out.append("}\n\nItemBrowserData.category = {\n")
+    for cls in order:
+        info = categories[cls]
+        out.append("  [%d] = { name = %s, count = %d, sub = {\n"
+                   % (cls, lua_string(info["name"]), info["count"]))
+        out.append(wrap(["{%d,%d,%s}" % (sub, count, lua_string(label))
+                         for sub, count, label in info["sub"]], indent="    "))
+        out.append("  } },\n")
+    out.append("}\n")
+
+    out.append(
+        "\n-- Pooled (AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank), four\n"
+        "-- numbers per record. A row's packed `restrict` field is a 1-based index into this;\n"
+        "-- 0 means the row has no restriction of any kind and never appears here.\n"
+        "ItemBrowserData.restrict = {\n")
+    out.append(wrap(["%d,%d,%d,%d" % rec for rec in pool], indent="  "))
+    out.append("}\n")
+
+    out.append(
+        "\n-- class -> subclass -> the proficiency skill Player::CanUseItem demands, from\n"
+        "-- ItemTemplate.h::GetSkill(). Nothing in item_template encodes this: it is why a mage\n"
+        "-- with Usable ticked does not see plate.\n"
+        "ItemBrowserData.profSkill = {\n")
+    for cls in sorted(prof):
+        pairs = ", ".join("[%d]=%d" % (sub, skill) for sub, skill in sorted(prof[cls].items()))
+        out.append("  [%d] = { %s },\n" % (cls, pairs))
+    out.append("}\n")
+
+    out.append(
+        "\n-- skill id -> SkillLine.dbc's name for it, which is the string the client's own\n"
+        "-- GetSkillLineInfo() returns. Matching on the name is what lets the addon ask 'does\n"
+        "-- this character have that proficiency' without a server round trip.\n"
+        "--\n"
+        "-- A value of `false` means item_template asks for a skill line that SkillLine.dbc\n"
+        "-- does not contain -- six vanilla leftovers do. Neither the client nor the server can\n"
+        "-- give anybody such a skill, so PlayerCanUseItem would reject those items for every\n"
+        "-- character, and so does the Usable filter.\n"
+        "ItemBrowserData.skillName = {\n")
+    out.append(wrap(["[%d]=%s" % (sid, lua_string(name) if name else "false")
+                     for sid, name in sorted(skill_names.items())], indent="  "))
+    out.append("}\n")
+
+    out.append(
+        "\n-- UnitClass()/UnitRace()'s second return value -> the id whose bit AllowableClass\n"
+        "-- and AllowableRace set. ChrClasses.dbc field 55 and ChrRaces.dbc field 11 hold\n"
+        "-- exactly those strings; upper-cased here so the addon can match either casing.\n"
+        "ItemBrowserData.classBit = {\n")
+    out.append(wrap(["[%s]=%d" % (lua_string(token), value)
+                     for token, value in sorted(class_bits.items())], indent="  "))
+    out.append("}\n\nItemBrowserData.raceBit = {\n")
+    out.append(wrap(["[%s]=%d" % (lua_string(token), value)
+                     for token, value in sorted(race_bits.items())], indent="  "))
     out.append("}\n")
     return "".join(out)
 
@@ -296,7 +599,8 @@ def render_data_xml(shard_names):
     # exactly like "the addon shipped without its database".
     lines = ['<Ui xmlns="http://www.blizzard.com/wow/ui/">',
              '    <!-- GENERATED by tools/itemdb.py. Do not hand-edit. -->',
-             '    <Script file="Icons.lua"/>']
+             '    <Script file="Icons.lua"/>',
+             '    <Script file="Filters.lua"/>']
     for name in shard_names:
         lines.append(f'    <Script file="{name}"/>')
     lines.append('    <Script file="Meta.lua"/>')
@@ -315,18 +619,28 @@ class Fail(Exception):
 def build(db, dbc_dir, shard_rows):
     """Everything the generator would write, as {relative path: text}. No side effects."""
     display_icon = load_item_icons(dbc_dir)
+    class_names = load_class_names(dbc_dir)
+    subclass_names = load_subclass_names(dbc_dir)
+    all_skill_names = load_skill_names(dbc_dir)
+    class_bits, race_bits = load_player_bits(dbc_dir)
+    prof = proficiency_map()
+
     raw = db.query(ITEM_QUERY)
     if not raw:
         raise Fail("item_template returned no rows -- is the world DB imported?")
 
     icon_index, icon_list = {}, []
+    pool_index, pool = {UNRESTRICTED: 0}, []
+    class_rows, subclass_rows = {}, {}
+    used_skills = set()
     rows = []
     previous_entry = -1
     for cols in raw:
-        if len(cols) != 9:
-            raise Fail(f"expected 9 columns, got {len(cols)}: {cols[:3]}")
-        entry, displayid, quality, ilvl, rlvl, cls, sub, inv = (int(c) for c in cols[:8])
-        name = cols[8]
+        if len(cols) != ITEM_QUERY_COLUMNS:
+            raise Fail(f"expected {ITEM_QUERY_COLUMNS} columns, got {len(cols)}: {cols[:3]}")
+        (entry, displayid, quality, ilvl, rlvl, cls, sub, inv,
+         allow_class, allow_race, req_skill, req_rank) = (int(c) for c in cols[:12])
+        name = cols[12]
 
         # --- invariant #10 -----------------------------------------------------------
         if "|" in name:
@@ -347,13 +661,49 @@ def build(db, dbc_dir, shard_rows):
             icon_list.append(icon)
             slot = icon_index[icon] = len(icon_list)   # 1-based, Lua array
 
-        meta = pack_meta([quality, inv, cls, sub, rlvl, ilvl])
+        # Restriction pool. Ordered by first appearance, which is entry order, which is what
+        # keeps the output byte-deterministic (invariant #8).
+        tuple_ = (allow_class, allow_race, req_skill, req_rank)
+        restrict = pool_index.get(tuple_)
+        if restrict is None:
+            pool.append(tuple_)
+            restrict = pool_index[tuple_] = len(pool)  # 1-based; 0 is UNRESTRICTED
+        if req_skill:
+            used_skills.add(req_skill)
+
+        class_rows[cls] = class_rows.get(cls, 0) + 1
+        subclass_rows[(cls, sub)] = subclass_rows.get((cls, sub), 0) + 1
+
+        fields = [quality, inv, cls, sub, rlvl, ilvl, restrict]
+        meta = pack_meta(fields)
         # --- invariant #2 ------------------------------------------------------------
-        if unpack_meta(meta) != [quality, inv, cls, sub, rlvl, ilvl]:
+        if unpack_meta(meta) != fields:
             raise Fail(f"item {entry}: meta pack/unpack round trip failed")
+        # --- invariant #12 -----------------------------------------------------------
+        got = UNRESTRICTED if restrict == 0 else pool[restrict - 1]
+        if got != tuple_:
+            raise Fail(f"item {entry}: restriction pool slot {restrict} holds {got}, "
+                       f"not {tuple_}")
         rows.append((entry, name, meta, slot))
 
-    files = {"Icons.lua": render_icons(icon_list)}
+    categories, order = build_categories(class_names, subclass_names, class_rows, subclass_rows)
+    # --- invariant #13, DBC half -----------------------------------------------------
+    # The proficiency skills MUST resolve: a nameless one would be a parse bug, and the addon
+    # would silently stop filtering plate away from mages. A nameless RequiredSkill is a
+    # different thing -- item_template genuinely asks six items for skill lines 40 and 242,
+    # which this client's SkillLine.dbc does not have. Those are emitted as `false`.
+    for by_subclass in prof.values():
+        for skill in by_subclass.values():
+            if not all_skill_names.get(skill):
+                raise Fail(f"proficiency skill {skill} has no name in SkillLine.dbc")
+            used_skills.add(skill)
+    skill_names = {s: all_skill_names.get(s, "") for s in used_skills}
+
+    files = {
+        "Icons.lua": render_icons(icon_list),
+        "Filters.lua": render_filters(categories, order, pool, prof, skill_names,
+                                      class_bits, race_bits),
+    }
     chunks = [rows[i:i + shard_rows] for i in range(0, len(rows), shard_rows)]
     shard_names = ["Items_%02d.lua" % n for n in range(1, len(chunks) + 1)]
     for n, (name, chunk) in enumerate(zip(shard_names, chunks), 1):
@@ -365,12 +715,42 @@ def build(db, dbc_dir, shard_rows):
         raise Fail(f"row count drift: selected {len(raw)}, built {len(rows)}, emitted {emitted}")
 
     digest = hashlib.sha256()
-    for name in ["Icons.lua"] + shard_names:
+    for name in ["Icons.lua", "Filters.lua"] + shard_names:
         digest.update(files[name].encode("utf-8"))
     files["Meta.lua"] = render_meta(len(rows), len(icon_list), shard_names,
                                     digest.hexdigest()[:16])
     files["Data.xml"] = render_data_xml(shard_names)
-    return files, rows, icon_list
+    return files, rows, icon_list, pool
+
+
+def build_categories(class_names, subclass_names, class_rows, subclass_rows):
+    """Labels + counts for every class/subclass that at least one row uses. Invariant #11.
+
+    A category with no items is not emitted: offering "Permanent" in a dropdown that can only
+    ever return nothing is worse than not offering it. Conversely a class/subclass pair that
+    the DBCs have never heard of still gets a row -- item_template really does contain
+    class 15 subclass 12 and class 12 subclass 8 -- labelled by number rather than dropped,
+    because dropping it would make those items unreachable through the category filter.
+    """
+    def clean(label, what):
+        if not label:
+            return None
+        if "|" in label or any(ord(ch) < 0x20 for ch in label):
+            raise Fail(f"{what} label {label!r} carries '|' or a control character")
+        return label
+
+    categories, order = {}, sorted(class_rows)
+    for cls in order:
+        label = clean(class_names.get(cls), f"class {cls}") or ("Class %d" % cls)
+        sub = []
+        for (c, s), count in sorted(subclass_rows.items()):
+            if c != cls:
+                continue
+            slabel = (clean(subclass_names.get((c, s)), f"subclass {c}/{s}")
+                      or ("Subclass %d" % s))
+            sub.append((s, count, slabel))
+        categories[cls] = {"name": label, "count": class_rows[cls], "sub": sub}
+    return categories, order
 
 
 # ==========================================================================================
@@ -381,6 +761,24 @@ SPOT_CHECKS = {
     6948:  ("Hearthstone",  1, "INV_Misc_Rune_01"),
     49623: ("Shadowmourne", 5, "inv_axe_113"),
     25:    ("Worn Shortsword", 1, "INV_Sword_04"),
+}
+
+# entry -> (class label, subclass label). The subclass strings are the ones only the VERBOSE
+# column carries: DisplayName would call both of Shadowmourne's neighbours "Axe".
+CATEGORY_SPOT_CHECKS = {
+    49623: ("Weapon", "Two-Handed Axes"),      # class 2, subclass 1
+    51220: ("Armor", "Plate"),                 # class 4, subclass 4 -- socketed tier epic
+    39:    ("Armor", "Cloth"),                 # class 4, subclass 1 -- a plain grey
+    2589:  ("Trade Goods", "Cloth"),           # class 7, subclass 5
+    6948:  ("Miscellaneous", "Junk"),          # class 15, subclass 0
+}
+
+# entry -> (AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank), as the live table
+# has them. Proves the restriction pool is indexed the way the addon will read it.
+RESTRICT_SPOT_CHECKS = {
+    25:    (-1, -1, 0, 0),                     # unrestricted -> pool index 0
+    49623: (260643, 2147483647, 0, 0),         # Shadowmourne: the plate/mail melee classes
+    2589:  (32767, -1, 0, 0),                  # Linen Cloth: every class, any race
 }
 
 
@@ -397,6 +795,44 @@ def check_spots(rows, icon_list):
             raise Fail(f"spot check: item {entry} came out as "
                        f"{row[1]!r}/q{quality}/{icon}, expected "
                        f"{want_name!r}/q{want_quality}/{want_icon}")
+
+
+def check_category_spots(rows, files, pool):
+    """Invariant #6, filter half: the labels and restrictions a known item resolves to.
+
+    Re-reads what was EMITTED rather than the intermediate dicts, so a bug in render_filters
+    is caught as well as a bug in build_categories.
+    """
+    text = files["Filters.lua"]
+    labels = {}
+    for block in re.finditer(r"\[(\d+)\] = \{ name = \"([^\"]*)\", count = \d+, sub = \{(.*?)\n  \} \},",
+                             text, re.S):
+        cls = int(block.group(1))
+        labels[cls] = (block.group(2), {})
+        for sub in re.finditer(r"\{(\d+),\d+,\"([^\"]*)\"\}", block.group(3)):
+            labels[cls][1][int(sub.group(1))] = sub.group(2)
+
+    by_entry = {r[0]: r for r in rows}
+    for entry, (want_class, want_sub) in CATEGORY_SPOT_CHECKS.items():
+        row = by_entry.get(entry)
+        if row is None:
+            raise Fail(f"category spot check: item {entry} missing from the output")
+        _, _, cls, sub, _, _, _ = unpack_meta(row[2])
+        got = labels.get(cls)
+        if not got:
+            raise Fail(f"category spot check: class {cls} (item {entry}) has no emitted label")
+        if (got[0], got[1].get(sub)) != (want_class, want_sub):
+            raise Fail(f"category spot check: item {entry} is {got[0]!r}/"
+                       f"{got[1].get(sub)!r}, expected {want_class!r}/{want_sub!r}")
+
+    for entry, want in RESTRICT_SPOT_CHECKS.items():
+        row = by_entry.get(entry)
+        if row is None:
+            raise Fail(f"restriction spot check: item {entry} missing from the output")
+        index = unpack_meta(row[2])[6]
+        got = UNRESTRICTED if index == 0 else pool[index - 1]
+        if got != want:
+            raise Fail(f"restriction spot check: item {entry} resolves to {got}, expected {want}")
 
 
 def lua_parser():
@@ -438,7 +874,8 @@ def check_sizes(files, limit):
 def check_data_xml(files):
     """Invariant #9."""
     listed = re.findall(r'<Script file="([^"]+)"/>', files["Data.xml"])
-    emitted = ["Icons.lua"] + sorted(n for n in files if n.startswith("Items_")) + ["Meta.lua"]
+    emitted = (["Icons.lua", "Filters.lua"]
+               + sorted(n for n in files if n.startswith("Items_")) + ["Meta.lua"])
     if listed != emitted:
         raise Fail(f"Data.xml load order {listed} != emitted files {emitted}")
     # Well-formedness, checked because WoW's response to a malformed .xml is to skip the
@@ -618,18 +1055,42 @@ def main():
                          f"(default dir: {DEFAULT_CLIENT_DATA})")
     ap.add_argument("--strict-icons", action="store_true",
                     help="make an unresolvable icon a hard failure")
+    ap.add_argument("--ac-src", default=DEFAULT_AC_SRC, metavar="DIR",
+                    help="core checkout to cross-check the proficiency table against "
+                         f"(default: {DEFAULT_AC_SRC}; skipped if absent)")
+    ap.add_argument("--dump-rows", metavar="FILE",
+                    help="write the raw item_template SELECT to FILE as TSV and exit; "
+                         "tools/selftest.lua checks the generated database against it")
     args = ap.parse_args()
 
     try:
+        if args.dump_rows:
+            rows = Db(args.mysql_cmd).query(ITEM_TRUTH_QUERY)
+            with open(args.dump_rows, "w", encoding="utf-8", newline="\n") as fh:
+                for cols in rows:
+                    fh.write("\t".join(cols) + "\n")
+            print(f"   {len(rows):,} rows -> {args.dump_rows}")
+            return 0
+
         print(f"== reading item_template (read-only) and {os.path.basename(args.dbc)}/"
-              "ItemDisplayInfo.dbc")
-        files, rows, icons = build(Db(args.mysql_cmd), args.dbc, args.shard_rows)
+              "{ItemDisplayInfo,ItemClass,ItemSubClass,SkillLine}.dbc")
+        # --- invariant #13, core half ------------------------------------------------
+        note = check_proficiency(args.ac_src)
+        if note:
+            print(f"   {note}")
+        else:
+            print(f"   !! no core checkout at {args.ac_src} -- invariant #13 (the weapon and "
+                  "armour proficiency table matches ItemTemplate.h) NOT CHECKED", file=sys.stderr)
+
+        files, rows, icons, pool = build(Db(args.mysql_cmd), args.dbc, args.shard_rows)
         check_spots(rows, icons)
+        check_category_spots(rows, files, pool)
         check_data_xml(files)
         check_sizes(files, args.max_file_bytes)
         total = sum(len(t.encode("utf-8")) for t in files.values())
         print(f"   {len(rows):,} items, {len(icons):,} distinct icons, "
-              f"{len(files)} files, {total:,} bytes total")
+              f"{len(pool):,} distinct restrictions, {len(files)} files, "
+              f"{total:,} bytes total")
 
         if args.icon_check:
             print(f"== icon probe against {args.icon_check}")
@@ -653,7 +1114,10 @@ def main():
         check_lua_parses(written)
         print("   ok")
         return 0
-    except (Fail, RuntimeError, OSError) as exc:
+    # ValueError is in the list because pack_meta() raises it when a field outgrows its width
+    # -- invariant #2's tripwire. That is a normal, expected failure with a useful message
+    # ("widen FIELD_WIDTHS"), not a bug to print a traceback for.
+    except (Fail, RuntimeError, OSError, ValueError) as exc:
         print(f"itemdb.py: {exc}", file=sys.stderr)
         return 1
 

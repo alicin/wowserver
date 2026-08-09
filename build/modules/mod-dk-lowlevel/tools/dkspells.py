@@ -71,6 +71,33 @@ section 6's; G8+ are additions this implementation makes.
       PlayerStorage.cpp:2363 -- and the template class is the first entry in
       spec.TEMPLATE_CLASS_PREFERENCE that satisfies that, so the two non-warrior choices are
       re-derived rather than trusted.
+  #17 the level ladder: every ability's rank 1 is at the brief's level, ranks are exactly
+      RANK_STEP apart, the last one is below the stock rank and no further below it than one
+      step, BaseLevel and SpellLevel in the emitted record equal the ladder level, and the
+      whole progression table is sorted with every level in 1..80.
+  #18 the 55+ handoff: the last custom rank and the first stock rank are ADJACENT in the chain,
+      no stock rank gets a spell_dbc override row, and the module itself grants the first stock
+      rank at its BaseLevel so the handoff does not depend on mod-learn-spells.
+  #19 the curve: minimum and maximum both rise strictly with every rank, the last custom rank is
+      strictly weaker than stock rank 1, no rank rounds to zero, and Icy Touch rank 1 is still
+      exactly 10-12 -- the one hand-calibrated number, live on a real character.
+  #20 rune costs: every stock rank of a cloned ability points at a DIFFERENT SpellRuneCost.dbc
+      row, so "the clone keeps the stock cost" is only true because those rows are identical.
+      Checked, not assumed.
+  #21 the AcquireMethod = 2 set is RE-DERIVED from this realm's playercreateinfo_skills and the
+      stock DBC by reproducing learnSkillRewardedSpells' filters, and every row it finds whose
+      spell has BaseLevel >= 2 must be flipped by the spec or waived with a reason.
+  #22 every cloned stock id is grepped against the pinned core's SpellInfoCorrections.cpp: a
+      correction is keyed on the spell id and does NOT survive cloning, so any hit must be baked
+      into the clone as cells or explicitly waived.
+  #23 every script the live spell_script_names table binds to a chain this feature renumbers is
+      re-pointed onto every rank of the new chain. Missing one silently unhooks the script from
+      the STOCK ranks too (ObjectMgr.cpp:6377-6381), which is a live-realm regression.
+  #24 a mirror chain has exactly as many ranks, at exactly the same levels, as the chain it
+      mirrors. spell_dk_threat_of_thassarian looks the off-hand spell up BY THE MAIN-HAND RANK
+      NUMBER and SpellMgr::GetSpellWithRank (SpellMgr.cpp:650) follows `node->next->Id` with no
+      null check, so a shorter off-hand chain is a worldserver segfault, not a wrong number.
+      See MIRROR_CHAINS_WHY in dk_spec.py.
 """
 
 import argparse
@@ -245,6 +272,25 @@ def sql_value(v):
 # the plan: everything the spec implies, built once, used by both emit and check
 # ==========================================================================================
 
+def _read_spell_rune_costs(path):
+    """{id: (blood, unholy, frost, runic power)} from SpellRuneCost.dbc, or {} if absent.
+
+    Five uint32 columns, 475 rows, no strings -- small enough that a dbc_tables entry would be
+    more machinery than the one invariant that uses it deserves.
+    """
+    if not os.path.exists(path):
+        return {}
+    with open(path, "rb") as f:
+        blob = f.read()
+    magic, rc, fc, rs, _ss = struct.unpack_from("<4sIIII", blob, 0)
+    assert magic == b"WDBC" and fc == 5 and rs == 20, f"{path}: unexpected shape {fc}x{rs}"
+    out = {}
+    for i in range(rc):
+        v = struct.unpack_from("<5I", blob, 20 + i * rs)
+        out[v[0]] = v[1:]
+    return out
+
+
 class Plan:
     """Patched DBCs plus the SQL rows read back out of them.
 
@@ -263,6 +309,15 @@ class Plan:
                           os.path.join(dbc_in, "CharStartOutfit.dbc"))
         self.stock_spell_ids = set(self.spell.index())
         self.stock_sla_ids = set(self.sla.index())
+        # Snapshot BEFORE any edit: invariant #21 needs to know what the stock file said, and
+        # _build_sla is about to overwrite six of these in place.
+        _am = dbc_tables.SKILLLINEABILITY_DBC.index_of["AcquireMethod"]
+        self.stock_sla_acquire_methods = {sla_id: self.sla.cell(row, _am)
+                                          for sla_id, row in self.sla.index().items()}
+        # SpellRuneCost.dbc is not one of the three tables this feature patches, so it has no
+        # entry in dbc_tables. It is read raw, purely so invariant #20 can prove that cloning
+        # rank 1's RuneCostID gives every custom rank the stock rune cost.
+        self.rune_costs = _read_spell_rune_costs(os.path.join(dbc_in, "SpellRuneCost.dbc"))
 
         self.sql_rows = {t.sql_table: {} for t in dbc_tables.ALL_TABLES}
         self.client_only_ids = {t.sql_table: set() for t in dbc_tables.ALL_TABLES}
@@ -274,41 +329,116 @@ class Plan:
         self._build_ranks()
 
     # ---------------------------------------------------------------- Spell.dbc (A3/A11) --
+    def stock_cell(self, ability, column):
+        """A named cell of the ability's clone source, read out of the stock DBC."""
+        return self.spell.cell(self.spell.index()[ability.clone_from],
+                               dbc_tables.SPELL_DBC.index_of[column])
+
+    def rank_overrides(self, ability, rank):
+        """Every cell a custom rank overrides on its clone source, and its value.
+
+        The scaled values are computed HERE, from the stock record, and never appear in
+        dk_spec.py -- which is the whole reason the curve is a function of the stock cell rather
+        than a table of numbers. A Spell.dbc that disagrees with the spec is not possible; the
+        spec has nothing to disagree with.
+        """
+        out = {name: get(rank, ability)
+               for name, get in spec.FIXED_OVERRIDE_COLUMNS.items()}
+        for cell in ability.scaling:
+            base = self.stock_cell(ability, cell.base_points)
+            die = self.stock_cell(ability, cell.die_sides)
+            out[cell.base_points], out[cell.die_sides] = spec.scale_cell(
+                base, die, rank.level, ability.handoff_level)
+        out.update(ability.extra_overrides)
+        return out
+
+    @staticmethod
+    def cell_range(base_points, die_sides):
+        """($m, $M) -- the low and high value CalcValue can produce from a cell pair."""
+        if die_sides == 0:
+            return base_points, base_points
+        return base_points + 1, base_points + die_sides
+
+    def rank_ranges(self, ability, rank):
+        """[(ScalingCell, low, high)] for one custom rank, for comments and invariant #19."""
+        ov = self.rank_overrides(ability, rank)
+        return [(c,) + self.cell_range(ov[c.base_points], ov[c.die_sides])
+                for c in ability.scaling]
+
+    def stock_ranges(self, ability):
+        return [(c,) + self.cell_range(self.stock_cell(ability, c.base_points),
+                                       self.stock_cell(ability, c.die_sides))
+                for c in ability.scaling]
+
+    def rank_summary(self, ability, rank):
+        """'10-12 Frost damage', or the multi-cell form. Comment text only."""
+        parts = []
+        for cell, lo, hi in self.rank_ranges(ability, rank):
+            parts.append(f"{lo} {cell.what}" if lo == hi else f"{lo}-{hi} {cell.what}")
+        return ", ".join(parts)
+
     def _build_spells(self):
         table = dbc_tables.SPELL_DBC
         idx = self.spell.index()
 
-        # #13: the five overrides must land where DESIGN.md 3.3 says they do.
+        # #13: the five original overrides must land where DESIGN.md 3.3 says they do.
         for name, want in spec.DOCUMENTED_OVERRIDE_INDICES.items():
             got = table.index_of[name]
             self.checks.expect(got == want, "#13",
                                f"spell override column {name} is at format index {got}",
                                f"DESIGN.md documents {want}")
 
+        self.overrides = {}                 # spell id -> {column: value}
         for ability in spec.ABILITIES:
             src_row = idx[ability.clone_from]
+            # #17 (spec half): the declared handoff level must be the stock record's own
+            # BaseLevel. It is the number the whole rank ladder is built from -- get it wrong and
+            # every custom rank of that ability is at the wrong level with no other symptom.
+            # A mirror chain has BaseLevel 0 (it is cast, never learned) and takes its levels
+            # from the ability it mirrors; #24 checks that instead.
+            if ability.learnable:
+                self.checks.expect(
+                    self.stock_cell(ability, "BaseLevel") == ability.handoff_level, "#17",
+                    f"{ability.key}: handoff level {ability.handoff_level} is "
+                    f"{ability.clone_from}'s own Spell.dbc BaseLevel",
+                    f"BaseLevel is {self.stock_cell(ability, 'BaseLevel')}")
+            # Horn of Winter's baked SpellInfoCorrections values assume the stock cell is what
+            # the core's `|=` was applied to. Assert the premise rather than the conclusion.
+            for name, value in ability.extra_overrides.items():
+                stock = self.stock_cell(ability, name)
+                self.checks.expect(
+                    stock != value, "#22",
+                    f"{ability.key}: extra override {name} = {value} actually changes the clone "
+                    f"(stock {stock})",
+                    "the override is a no-op; the correction it mirrors has moved or is stale")
+
             for rank in ability.ranks:
                 row = self.spell.clone_row(src_row)
                 before = bytes(self.spell.records[row])
-                for col_name, get in spec.SPELL_OVERRIDE_COLUMNS.items():
-                    self.spell.set_cell(row, table.index_of[col_name], get(rank))
+                overrides = self.rank_overrides(ability, rank)
+                self.overrides[rank.spell_id] = overrides
+                for col_name, value in overrides.items():
+                    self.spell.set_cell(row, table.index_of[col_name], value)
                 # Setting the subtext to the value the clone already carries must not move a
                 # single byte -- add_string() reuses the existing NUL-bounded string. Asserted
-                # rather than assumed, so "exactly five effective overrides" stays true.
+                # rather than assumed, which is why rank 1 stays exactly as many cells from its
+                # clone source as the override list says.
                 subtext_col = table.index_of[spec.SUBTEXT_COLUMN]
                 offset_before = self.spell.get_u32(row, subtext_col)
                 self.spell.set_cell(row, subtext_col, rank.subtext)
                 self.checks.expect(
-                    self.spell.get_u32(row, subtext_col) == offset_before
-                    or self.spell.get_str(row, subtext_col) == rank.subtext,
-                    "#13", f"spell {rank.spell_id} NameSubtext resolves to {rank.subtext!r}")
+                    self.spell.get_str(row, subtext_col) == rank.subtext, "#13",
+                    f"spell {rank.spell_id} NameSubtext resolves to {rank.subtext!r}")
+                budget = 4 * (len(overrides)
+                              + (0 if self.spell.get_u32(row, subtext_col) == offset_before
+                                 else 1))
                 changed = sum(1 for a, b in zip(before, bytes(self.spell.records[row]))
                               if a != b)
                 self.checks.expect(
-                    changed <= 4 * len(spec.SPELL_OVERRIDE_COLUMNS), "#13",
+                    changed <= budget, "#13",
                     f"spell {rank.spell_id} is a clone of {ability.clone_from} with "
-                    f"{len(spec.SPELL_OVERRIDE_COLUMNS)} cell overrides",
-                    f"{changed} bytes differ")
+                    f"{len(overrides)} cell override(s) -- {self.rank_summary(ability, rank)}",
+                    f"{changed} bytes differ, budget {budget}")
                 self.sql_rows["spell_dbc"][rank.spell_id] = self.spell.row_values(row)
                 self.touched_ids["spell_dbc"].add(rank.spell_id)
 
@@ -329,7 +459,7 @@ class Plan:
     def _build_sla(self):
         table = dbc_tables.SKILLLINEABILITY_DBC
         idx = self.sla.index()
-        for ability in spec.ABILITIES:
+        for ability in spec.LEARNABLE_ABILITIES:
             for rank in ability.ranks:
                 row = len(self.sla.records)
                 self.sla.records.append(bytearray(table.record_size))
@@ -357,14 +487,18 @@ class Plan:
                 self.sql_rows["skilllineability_dbc"][rank.sla_id] = self.sla.row_values(row)
                 self.touched_ids["skilllineability_dbc"].add(rank.sla_id)
 
-            for sla_id, edits in sorted(ability.stock_sla_edits.items()):
-                row = idx[sla_id]
-                # Every other field is copied verbatim by virtue of editing the parsed record
-                # in place -- there is no re-authoring step that could drop one.
-                for name, value in edits.items():
-                    self.sla.set_cell(row, table.index_of[name], value)
-                self.sql_rows["skilllineability_dbc"][sla_id] = self.sla.row_values(row)
-                self.touched_ids["skilllineability_dbc"].add(sla_id)
+        # The AcquireMethod flips. Module-level rather than per-ability: the set is derived from
+        # this realm's creation data (see STOCK_SLA_FLIPS in dk_spec.py), and two of the six --
+        # Blood Presence and Death Grip -- belong to abilities that have no custom ranks at all,
+        # so there is no ability to hang them off.
+        for sla_id, edits in sorted(spec.STOCK_SLA_EDITS.items()):
+            row = idx[sla_id]
+            # Every other field is copied verbatim by virtue of editing the parsed record
+            # in place -- there is no re-authoring step that could drop one.
+            for name, value in edits.items():
+                self.sla.set_cell(row, table.index_of[name], value)
+            self.sql_rows["skilllineability_dbc"][sla_id] = self.sla.row_values(row)
+            self.touched_ids["skilllineability_dbc"].add(sla_id)
 
     # ------------------------------------------------------- CharStartOutfit.dbc (A8/A13) --
     def outfit_items(self, outfit_id):
@@ -440,19 +574,24 @@ class Plan:
                 self.sql_rows["charstartoutfit_dbc"][dk_id] = self.outfit.row_values(dst)
                 self.touched_ids["charstartoutfit_dbc"].add(dk_id)
 
-    # --------------------------------------------------------------- spell_ranks (A5/A6) --
+    # ----------------------------------------------------- spell_ranks / bonus / scripts --
     def _build_ranks(self):
         self.spell_ranks = []
         self.spell_bonus = []
         self.rank_deletes = []
+        # [(ScriptName, negative stock row to remove, [spell ids to bind])]
+        self.script_binds = []
         for ability in spec.ABILITIES:
             chain = ability.chain
             first = chain[0]
             self.rank_deletes.append((ability.stock_chain[0], first, chain))
             for i, sid in enumerate(chain, start=1):
                 self.spell_ranks.append((first, sid, i))
-            for rank in ability.ranks:
-                self.spell_bonus.append((rank.spell_id,) + ability.bonus)
+            if ability.bonus is not None:
+                for rank in ability.ranks:
+                    self.spell_bonus.append((rank.spell_id,) + ability.bonus)
+            for script in ability.scripts:
+                self.script_binds.append((script, -ability.stock_chain[0], list(chain)))
 
 
 # ==========================================================================================
@@ -548,35 +687,35 @@ DELETE FROM `player_class_stats` WHERE `Class` = {spec.DK_CLASS} AND `Level` BET
     return body, out_rows
 
 
-def _spell_column_notes(spell_id):
+def _spell_column_notes(plan, spell_id):
     """Trailing `-- why` notes on the cells a reviewer must be able to check at a glance.
 
     Every one of these is a cell that looks arbitrary and is not; the rest of the 234 are
-    verbatim clone output and are noise if annotated.
+    verbatim clone output and are noise if annotated. The scaled cells get their resolved
+    tooltip value spelled out, because "EffectBasePoints_1 = 61" is not something anyone can
+    check and "$m1 = 62" against a tooltip is.
     """
+    ability = spec.ability_by_spell_id(spell_id)
     rank = spec.rank_by_spell_id(spell_id)
     notes = {
-        "ID": f"custom block {spec.SPELL_ID_BASE}-{spec.SPELL_ID_BASE + 999}, "
-              f"above Spell.dbc's max 80864 and below AC's own 100001",
-        "BaseLevel": "learn level; also mod-learn-spells filter",
+        "ID": f"custom block {spec.SPELL_ID_BASE}-{spec.SPELL_ID_MAX - 1}, above Spell.dbc's "
+              f"max 80864 and below AC's own 100001",
+        "BaseLevel": "learn level; also mod-learn-spells' filter",
         "SpellLevel": "damage scaling level",
-        "Effect_1": "2 SPELL_EFFECT_SCHOOL_DAMAGE",
-        "Effect_2": "64 SPELL_EFFECT_TRIGGER_SPELL",
-        "EffectTriggerSpell_2": "55095 Frost Fever -- the entire disease mechanism, cloned",
-        "SpellClassSet": "15 SPELLFAMILY_DEATHKNIGHT (SharedDefines.h:3799)",
-        "SpellClassMask_1": "matched by Improved Icy Touch / Killing Machine / Rime",
-        "SpellIconID": "2721 -- SpellInfoCorrections.cpp:5306 keys a synthetic "
-                       "SpellFamilyFlags bit off this",
-        "RuneCostID": "241 = 0 Blood / 0 Unholy / 1 Frost / 100 RunicPower, shared with "
-                      "every stock rank",
-        "SchoolMask": "16 Frost",
-        "CastingTimeIndex": "1 instant",
-        "RangeIndex": "3, 20 yards",
-        "PowerType": "5 POWER_RUNE",
+        "SpellClassSet": "15 SPELLFAMILY_DEATHKNIGHT (SharedDefines.h:3799) -- cloned, and the "
+                         "only reason talents and glyphs still see this rank",
+        "SpellClassMask_1": "cloned; SpellInfo::IsAffected matches talents/procs on this",
+        "RuneCostID": f"cloned from {ability.clone_from if ability else '?'}; every stock rank "
+                      f"of this ability shares the same SpellRuneCost values (invariant #20)",
     }
-    if rank:
-        notes["EffectDieSides_1"] = f"$M1 = BasePoints + DieSides = {rank.damage_max}"
-        notes["EffectBasePoints_1"] = f"$m1 = BasePoints + 1 = {rank.damage_min}"
+    if ability and rank:
+        for cell, lo, hi in plan.rank_ranges(ability, rank):
+            notes[cell.base_points] = (f"$m = {lo}" if lo == hi
+                                       else f"$m = BasePoints + 1 = {lo}")
+            if plan.rank_overrides(ability, rank)[cell.die_sides] > 1:
+                notes[cell.die_sides] = f"$M = BasePoints + DieSides = {hi}"
+        for name in ability.extra_overrides:
+            notes[name] = "SpellInfoCorrections.cpp bake -- see HORN_OF_WINTER in dk_spec.py"
     return notes
 
 
@@ -586,14 +725,25 @@ def emit_spells(plan):
 
     # ---- A3 -----------------------------------------------------------------------------
     spell_ids = sorted(plan.sql_rows["spell_dbc"])
+    ability_table = "".join(
+        f"--   {a.name:<24} {len(a.ranks)} ranks at levels "
+        f"{', '.join(str(l) for l in a.rank_levels)}, then stock {a.stock_chain[0]}"
+        + (f" at {a.handoff_level}\n" if a.learnable
+           else f"\n--   {'':<24} NEVER LEARNED -- rank-count mirror of "
+                f"{a.mirror_of}, see MIRROR_CHAINS_WHY\n")
+        for a in spec.ABILITIES)
     parts.append(f"""--
--- A3. spell_dbc -- {len(spell_ids)} row(s), {len(dbc_tables.SPELL_DBC)} columns each.
+-- A3. spell_dbc -- {len(spell_ids)} rows, {len(dbc_tables.SPELL_DBC)} columns each,
+-- {len(spec.ABILITIES)} abilities.
 --
--- This is a byte-for-byte clone of the stock record with five cells overridden. Cloning is
--- what keeps the ability behaving like a Death Knight ability: SpellClassSet / SpellClassMask
--- carry every talent and proc interaction, EffectTriggerSpell_2 carries Frost Fever, and
--- SpellIconID carries the Sigil of the Frozen Conscience correction. None of those is keyed
--- on the spell id anywhere in the core, so an authored row would lose all of them silently.
+{ability_table}--
+-- Each row is a byte-for-byte clone of that ability's stock rank 1 with a handful of cells
+-- overridden -- ID, BaseLevel, SpellLevel, NameSubtext and the cells Blizzard themselves
+-- re-rank. Cloning is what keeps the ability behaving like a Death Knight ability:
+-- SpellClassSet / SpellClassMask carry every talent and proc interaction, EffectTriggerSpell
+-- carries the diseases, SpellIconID carries the Sigil of the Frozen Conscience correction, and
+-- RuneCostID carries the rune cost. None of those is keyed on the spell id anywhere in the
+-- core, so an authored row would lose all of them silently.
 --
 -- The column count is frozen by DBCDatabaseLoader.cpp:124 -- an ASSERT that aborts
 -- worldserver during LoadDBCStores. Never ALTER this table.
@@ -604,26 +754,34 @@ def emit_spells(plan):
         parts.append(f"DELETE FROM `spell_dbc` WHERE `ID` = {sid};")
         parts.append(_insert_set("spell_dbc", dbc_tables.SPELL_DBC.columns,
                                  plan.sql_rows["spell_dbc"][sid],
-                                 _spell_column_notes(sid)))
+                                 _spell_column_notes(plan, sid)))
 
     # ---- A4 -----------------------------------------------------------------------------
     sla_ids = sorted(plan.sql_rows["skilllineability_dbc"])
     new_ids = set(spec.all_custom_sla_ids())
+    flip_table = "".join(
+        f"--   {sla_id} -> spell {sp:<6} {name:<16} {why}\n"
+        for sla_id, (sp, name, why) in sorted(spec.STOCK_SLA_FLIPS.items()))
     parts.append(f"""--
 -- A4. skilllineability_dbc -- {len(sla_ids)} rows, {len(dbc_tables.SKILLLINEABILITY_DBC)} columns each.
 --
--- One new row per custom rank, plus an OVERRIDE of stock row 16231. That override is not
--- optional and it is the least obvious thing in this whole feature: stock 16231 is
--- (16231, 771, 45477, 0, 32, 0, 0, 1, 49896, 2, 0, 0, 0, 0), and AcquireMethod = 2 means
--- learnSkillRewardedSpells grants the LEVEL 55 Icy Touch the moment a Death Knight acquires
--- skill 771 -- which happens at character creation. Leave it and every new DK starts with a
--- 127-137 damage nuke and the feature is silently defeated.
+-- One new row per custom rank, plus {len(spec.STOCK_SLA_EDITS)} OVERRIDES of stock rows. Those
+-- overrides are not optional and they are the least obvious thing in this whole feature: stock
+-- 16231 is (16231, 771, 45477, 0, 32, 0, 0, 1, 49896, 2, 0, 0, 0, 0), and AcquireMethod = 2
+-- means learnSkillRewardedSpells grants the LEVEL 55 Icy Touch the moment a Death Knight
+-- acquires skill 771 -- which happens at character creation. Leave it and every new DK starts
+-- with a 127-137 damage nuke and the feature is silently defeated. The set is derived from the
+-- live database, not guessed; see STOCK_SLA_FLIPS and AM2_WAIVERS in tools/dk_spec.py and
+-- invariant #21.
 --
+{flip_table}--
 -- At most one row per supercede chain may carry AcquireMethod = 2: Player.cpp:12284-12300
--- sets skipCurrent when the SUPERSEDING row is also 2, so two would grant the higher rank.
--- Rank 1 carries it (and gets a free reconcile at every login via _LoadSkills ->
--- learnSkillRewardedSpells, Player.cpp:14081); everything above it is 0, which is also
--- mod-learn-spells filter (mod_learnspells.cpp:446).
+-- sets skipCurrent when the SUPERSEDING row is also 2, so two would grant the higher rank. A
+-- chain gets its one 2 only when its rank 1 is a LEVEL 1 ability, because AcquireMethod 2 grants
+-- at character creation and there is no level field on SkillLineAbility to say otherwise --
+-- so Icy Touch, Plague Strike and Blood Strike have one and the other five have none, and their
+-- rank 1 comes from the module's Reconcile() instead. Everything above rank 1 is 0, which is
+-- also mod-learn-spells' filter (mod_learnspells.cpp:446).
 --
 -- Every field other than the edited one is copied verbatim out of the parsed stock DBC.""")
     for sid in sla_ids:
@@ -639,7 +797,7 @@ def emit_spells(plan):
                        | {new for _o, new, _c in plan.rank_deletes})
     del_spells = sorted({s for _o, _n, chain in plan.rank_deletes for s in chain})
     parts.append(f"""--
--- A5. spell_ranks -- the Icy Touch chain, RENUMBERED.
+-- A5. spell_ranks -- {len(spec.ABILITIES)} chains, RENUMBERED.
 --
 -- SpellMgr::LoadSpellRanks (SpellMgr.cpp:1279-1388) is the only chain mechanism at this
 -- revision: there is no spell_chain table, and SkillLineAbility.SupercededBySpell is not used
@@ -647,6 +805,11 @@ def emit_spells(plan):
 -- spell, so inserting below rank 1 means renumbering the whole chain -- first_spell_id
 -- becomes {chains}. A gap makes it `continue` with only an sql.sql log line, and the chain
 -- silently disappears: in game that is one Icy Touch button per rank, with no supersession.
+--
+-- It is also what the A16 script rebind below depends on, and what puts a character on stock
+-- Blizzard data at the handoff: the last custom rank of each chain is immediately followed by
+-- that ability's stock rank 1, so Player::addSpell supersedes the custom rank the moment the
+-- stock one is learned.
 --
 -- Both delete forms are needed for idempotence: the table's primary key is
 -- (first_spell_id, rank) but spell_id carries a UNIQUE index, so a re-run after a spec change
@@ -660,19 +823,73 @@ def emit_spells(plan):
 
     # ---- A6 -----------------------------------------------------------------------------
     bonus_ids = sorted(r[0] for r in plan.spell_bonus)
+    with_bonus = ", ".join(a.name for a in spec.ABILITIES if a.bonus is not None)
+    without = ", ".join(a.name for a in spec.ABILITIES if a.bonus is None)
     parts.append(f"""--
--- A6. spell_bonus_data for the new ranks.
+-- A6. spell_bonus_data for the new ranks -- {len(bonus_ids)} rows.
 --
--- SpellMgr.cpp:947-961 falls back to the first rank of a chain when a spell has no row of its
--- own. All five stock Icy Touch ranks already have explicit rows, so renumbering
--- first_spell_id cannot disturb them; only the {len(bonus_ids)} new rank(s) need one. Values
--- copied from the stock 45477 row.""")
+-- SpellMgr::GetSpellBonusData (SpellMgr.cpp:947-961) falls back to the FIRST spell in the chain
+-- when a spell has no row of its own, and renumbering makes a custom rank the first spell. That
+-- cuts both ways, so the rule is: an ability whose stock ranks all carry explicit rows must give
+-- its custom ranks explicit rows too, and an ability with no rows anywhere must not acquire one.
+--
+--   rows emitted : {with_bonus}
+--   no rows      : {without}
+--
+-- Values are copied verbatim from that ability's stock rank 1 row, which is where the two
+-- coefficients below came from. Every stock rank of both abilities already has its own row, so
+-- renumbering first_spell_id cannot disturb them.""")
     parts.append("DELETE FROM `spell_bonus_data` WHERE `entry` IN ("
                  + ", ".join(str(i) for i in bonus_ids) + ");")
     parts.append(_insert_values(
         "spell_bonus_data",
         ("entry", "direct_bonus", "dot_bonus", "ap_bonus", "ap_dot_bonus", "comments"),
         plan.spell_bonus))
+
+    # ---- A16 ----------------------------------------------------------------------------
+    def _stock_of(script):
+        return next(a.stock_chain for a in spec.ABILITIES if script in a.scripts)
+
+    if plan.script_binds:
+        rows, deletes = [], []
+        for script, negative, chain in plan.script_binds:
+            deletes.append((script, [negative] + chain))
+            rows.extend((sid, script) for sid in chain)
+        listing = "".join(
+            f"--   {script:<28} was one row {negative}, now {len(chain)} rows: "
+            f"custom {chain[0]}-{chain[len(chain) - len(_stock_of(script)) - 1]} "
+            f"plus stock {', '.join(str(s) for s in _stock_of(script))}\n"
+            for script, negative, chain in plan.script_binds)
+        parts.append(f"""--
+-- A16. spell_script_names -- re-point the scripts of every RENUMBERED chain.
+--
+-- THE MOST DANGEROUS ROW IN THIS FILE IF IT IS MISSING. `spell_id < 0` means "this script, for
+-- every rank of this chain", and ObjectMgr::LoadSpellScriptNames (ObjectMgr.cpp:6377-6390) is:
+--
+--     if (sSpellMgr->GetFirstSpellInChain(spellId) != uint32(spellId)) {{ LOG_ERROR(...); continue; }}
+--     while (spellInfo) {{ insert(spellInfo->Id, script); spellInfo = spellInfo->GetNextRankSpell(); }}
+--
+-- A5 above moves the first spell of four chains. The instant it does, the stock negative row
+-- fails that test and the script is dropped for EVERY rank -- including the level-80 ones the
+-- Death Knights already on this realm cast. Death Coil's Effect_1 is SPELL_EFFECT_DUMMY and the
+-- script is the only thing that turns it into damage, so the failure mode is a spell that costs
+-- runic power and does nothing, with one line in sql.sql at boot.
+--
+{listing}--
+-- One POSITIVE row per spell rather than one negative row for the new chain head, deliberately.
+-- This feature ships behind a config flag and is expected to be toggled: if its SQL is ever
+-- rolled back while these rows are not, a negative row would point at a spell that no longer
+-- exists and take all the stock ranks down with it. Positive rows fail one spell at a time.
+--
+-- The DELETE names both the ScriptName and the exact spell ids this generator owns, so it
+-- cannot touch the other rows these scripts have (52212 for Death and Decay's trigger, 52375
+-- and -62900 for Death Coil's talent chain).""")
+        for script, ids in deletes:
+            parts.append(f"DELETE FROM `spell_script_names` WHERE `ScriptName` = "
+                         f"{sql_str(script)} AND `spell_id` IN ("
+                         + ", ".join(str(i) for i in ids) + ");")
+        parts.append(_insert_values("spell_script_names", ("spell_id", "ScriptName"),
+                                    sorted(rows)))
 
     return "\n\n".join(parts) + "\n"
 
@@ -797,12 +1014,13 @@ DELETE FROM `playercreateinfo` WHERE `class` = """ + str(spec.DK_CLASS)
     racial_notes = "\n".join(
         f"--   {r.race_id:>2} {r.name:<10} button {r.racial_button:>2}  "
         f"{r.racial_spell:>5}  {r.racial_name}" for r in spec.DK_RACES)
-    btn, dmg = spec.ACTION_BUTTON_RANK1, f"{rank1.damage_min} to {rank1.damage_max}"
+    btn = spec.ACTION_BUTTON_RANK1
+    dmg = plan.rank_summary(spec.ABILITIES[0], rank1)
     parts.append(f"""--
 -- A9. Action bar for a new Death Knight of each race -- {len(action_rows)} rows.
 --
 -- Button {btn} holds the custom rank ({rank1.spell_id}), so the acceptance test -- hover it
--- and read "{dmg} Frost damage" -- needs no setup. The stock rows handed out
+-- and read "{dmg}" -- needs no setup. The stock rows handed out
 -- 45477/45462/45902/47541/49576, all level 55 abilities the character will not know.
 -- {spec.ATTACK_SPELL} is Attack. The third button is the race's own racial, on the slot and
 -- with the spell Blizzard shipped for that race's Death Knight; the slot is not uniform:
@@ -836,12 +1054,14 @@ DELETE FROM `playercreateinfo_action` WHERE `class` = {spec.DK_CLASS} AND `race`
 # ==========================================================================================
 
 def emit_header(plan):
-    grants = spec.progression_grants()
+    entries = spec.progression_entries()
     lines = []
-    for level, sid in grants:
-        rank = spec.rank_by_spell_id(sid)
-        lines.append(f"    {{ {level:>2}, {sid} }},   // Icy Touch ({rank.subtext}) -- "
-                     f"{rank.damage_min}-{rank.damage_max} Frost damage")
+    for level, sid, kind, comment in entries:
+        detail = ""
+        if kind == spec.GRANT_CUSTOM:
+            ability = spec.ability_by_spell_id(sid)
+            detail = " -- " + plan.rank_summary(ability, spec.rank_by_spell_id(sid))
+        lines.append(f"    {{ {level:>2}, {sid} }},   // {comment}{detail}")
     utilities = "\n".join(
         f"static constexpr uint32 DK_SPELL_{name:<18} = {sid};"
         f"   // {cfg}, default level {lvl}"
@@ -877,6 +1097,18 @@ struct DkGrant
 
 // Sorted by level, then spell id. Reconcile() walks this in order and breaks on the first
 // entry above the player's level, so the ordering is load-bearing, not cosmetic.
+//
+// THREE KINDS OF ENTRY, ALL learnSpell(id) TO THE MODULE:
+//
+//   90xxx  a generated low rank -- a byte-clone of the stock rank 1 with its damage/heal/stat
+//          cells scaled to the level, and a spell_ranks row placing it below the stock ranks.
+//   stock  an ability with nothing to scale (a percentage, a taunt, a summon that scales to its
+//          owner). Blizzard's own record, unmodified, granted early.
+//   stock  at 55-65: the FIRST stock rank of a re-ranked ability. This is the handoff. Granting
+//          it here rather than leaving it to mod-learn-spells is what makes "from 55 you are on
+//          stock Blizzard data" a property of this module instead of a dependency on another
+//          one (DESIGN.md 4). Stock ranks ABOVE the first are deliberately absent: how a Death
+//          Knight gets Icy Touch rank 11 at 61 is unchanged by this feature.
 static constexpr DkGrant kDkProgression[] =
 {{
 {chr(10).join(lines)}
@@ -1122,28 +1354,69 @@ def check_ranks(plan, checks):
             walk.append(cur)
             cur = plan.sla.cell(by_spell[cur][0], supercede_col)
             guard += 1
-        checks.expect(tuple(walk) == ability.stock_chain, "#5",
-                      f"chain {ability.chain[0]}: stock ranks match the "
-                      f"SkillLineAbility supercede links {walk}",
-                      f"spec says {list(ability.stock_chain)}")
+        if tuple(walk) == ability.stock_chain:
+            checks.ok("#5", f"chain {ability.chain[0]}: stock ranks match the "
+                            f"SkillLineAbility supercede links {walk}")
+        else:
+            # Horn of Winter is the exception and it is Blizzard's, not ours: SLA row 19674 has
+            # SupercededBySpell = 0 even though 57623 is plainly its rank 2 (subtexts "Rank 1"
+            # and "Rank 2", BaseLevel 65 and 75, and the live spell_ranks table chains them).
+            # So this source is unusable for that ability; say so out loud and let
+            # check_chain_against_live_ranks do the grounding instead of quietly passing.
+            checks.expect(
+                len(walk) == 1 and walk[0] == ability.clone_from, "#5",
+                f"chain {ability.chain[0]} ({ability.name}): stock SkillLineAbility rows carry "
+                f"no supercede links, so the chain is ground-truthed against live spell_ranks "
+                f"instead",
+                f"partial walk {walk}, spec says {list(ability.stock_chain)} -- a link exists "
+                f"but disagrees, which is worse than none at all")
 
 
 def check_chain_not_orphaning(plan, db, checks):
-    """#5 (live half) -- the DELETE must not strand a spell that has a rank row today."""
+    """#5 (live half) -- the DELETE must not strand a spell that has a rank row today.
+
+    Also the ONLY ground truth left for an ability whose stock SkillLineAbility rows carry no
+    supercede links (Horn of Winter), so it checks the shape of the live chain, not just that
+    nothing is orphaned by it.
+    """
     for ability in spec.ABILITIES:
         old_first = ability.stock_chain[0]
         rows = db.query("SELECT spell_id FROM spell_ranks "
-                        f"WHERE first_spell_id = {old_first}")
-        existing = {int(r[0]) for r in rows}
+                        f"WHERE first_spell_id = {old_first} ORDER BY `rank`")
+        existing_order = tuple(int(r[0]) for r in rows)
+        existing = set(existing_order)
         orphaned = existing - set(ability.chain)
         checks.expect(not orphaned, "#5",
                       f"chain {old_first}: all {len(existing)} spells that have a rank row "
                       f"today are still in the renumbered chain",
                       f"would be orphaned by the DELETE: {sorted(orphaned)}")
+        # An empty result means this chain has already been renumbered by a previous run of this
+        # generator, which is the steady state on a live realm -- not a failure.
+        if existing_order:
+            checks.expect(existing_order == ability.stock_chain, "#5",
+                          f"chain {old_first} ({ability.name}): the live spell_ranks chain is "
+                          f"exactly the stock chain the spec declares",
+                          f"live {list(existing_order)} spec {list(ability.stock_chain)}")
+        else:
+            head = ability.chain[0]
+            live = tuple(int(r[0]) for r in db.query(
+                f"SELECT spell_id FROM spell_ranks WHERE first_spell_id = {head} "
+                "ORDER BY `rank`"))
+            checks.expect(set(ability.stock_chain) <= set(live) or not live, "#5",
+                          f"chain {old_first} ({ability.name}): already renumbered under "
+                          f"{head}; every stock rank is still in the live chain",
+                          f"live chain under {head} is {list(live)}")
 
 
 def check_acquire_methods(plan, checks):
-    """#6 -- exactly one AcquireMethod = 2 per supercede chain."""
+    """#6 -- at most one AcquireMethod = 2 per chain, on rank 1, and only if rank 1 is level 1.
+
+    Two rows with AcquireMethod = 2 in one chain would grant the HIGHER rank
+    (Player.cpp:12284-12300 sets skipCurrent when the superseding row is also 2). Zero rows is
+    legitimate and is the common case here: AcquireMethod 2 fires at CHARACTER CREATION with no
+    level test anywhere in learnSkillRewardedSpells, so an ability that starts at level 2 or
+    later must not have one at all and is granted by the module's Reconcile() instead.
+    """
     table = dbc_tables.SKILLLINEABILITY_DBC
     am, spell_col = table.index_of["AcquireMethod"], table.index_of["Spell"]
     for ability in spec.ABILITIES:
@@ -1155,12 +1428,327 @@ def check_acquire_methods(plan, checks):
                 seen.append((plan.sla.cell(row, spell_col), plan.sla.cell(row, am)))
                 if plan.sla.cell(row, am) == 2:
                     twos.append(plan.sla.cell(row, spell_col))
-        checks.expect(len(twos) == 1, "#6",
-                      f"chain {ability.chain[0]}: exactly one SkillLineAbility row has "
-                      f"AcquireMethod = 2 (spell {twos[0] if twos else None})",
-                      f"got {twos} from {seen}")
-        checks.expect(twos == [ability.chain[0]], "#6",
-                      f"chain {ability.chain[0]}: the AcquireMethod = 2 row is rank 1")
+        want = ([ability.chain[0]]
+                if ability.learnable and ability.ranks[0].level == 1 else [])
+        checks.expect(twos == want, "#6",
+                      f"chain {ability.chain[0]} ({ability.name}, rank 1 at level "
+                      f"{ability.ranks[0].level}): AcquireMethod = 2 rows are {twos or 'none'}",
+                      f"expected {want or 'none'} from {seen}")
+
+
+def check_acquire_method_derivation(plan, db, checks):
+    """#21 -- re-derive, from the live realm, every spell a DK is handed at character creation.
+
+    THE CHECK THAT STOPS THE FEATURE BEING SILENTLY POINTLESS. Reproduces
+    Player::learnSkillRewardedSpells (Player.cpp:12237-12311) against the stock DBC and this
+    realm's playercreateinfo_skills:
+
+      * the skill must be one a class-6 character receives at creation;
+      * AcquireMethod must be 2 (LEARNED_ON_SKILL_LEARN -- granted the moment the skill is);
+      * RaceMask and ClassMask must pass, and ZERO MEANS NO FILTER, so a row does not have to be
+        ClassMask 32 to fire on a Death Knight. That is the trap: two of the eight rows this
+        finds are ClassMask 0 on a DK-only skill line.
+
+    Anything it finds whose spell has BaseLevel >= 2 is a level-55-ish ability being handed to a
+    level-1 character. Each one must be either flipped by the spec or on AM2_WAIVERS with a
+    reason. A ninth row appearing in stock data fails the build instead of shipping.
+    """
+    table = dbc_tables.SKILLLINEABILITY_DBC
+    spell_table = dbc_tables.SPELL_DBC
+    dk_classmask = 1 << (spec.DK_CLASS - 1)
+
+    creation_skills = {}
+    for rm, cm, sk in db.query(
+            "SELECT racemask, classmask, skill FROM playercreateinfo_skills"):
+        creation_skills.setdefault(int(sk), []).append((int(rm), int(cm)))
+
+    spell_idx = plan.spell.index()
+    found = {}
+    for sla_id, row in sorted(plan.sla.index().items()):
+        if plan.sla.cell(row, table.index_of["AcquireMethod"]) != 2:
+            continue
+        skill = plan.sla.cell(row, table.index_of["SkillLine"])
+        if skill not in creation_skills:
+            continue
+        if not any(cm == 0 or cm & dk_classmask for _rm, cm in creation_skills[skill]):
+            continue
+        class_mask = plan.sla.cell(row, table.index_of["ClassMask"])
+        if class_mask and not (class_mask & dk_classmask):
+            continue
+        sid = plan.sla.cell(row, table.index_of["Spell"])
+        if sid not in spell_idx:
+            continue
+        base = plan.spell.cell(spell_idx[sid], spell_table.index_of["BaseLevel"])
+        if base < 2:
+            continue
+        found[sla_id] = (sid, base)
+
+    # plan.sla already has the flips applied, so a flipped row will not be in `found`. Compare
+    # against the union instead, which is what makes this a derivation and not a tautology.
+    handled = set(spec.STOCK_SLA_FLIPS) | set(spec.AM2_WAIVERS)
+    unexplained = {k: v for k, v in found.items() if k not in handled}
+    checks.expect(
+        not unexplained, "#21",
+        f"every AcquireMethod = 2 row a Death Knight receives at creation with BaseLevel >= 2 "
+        f"is either flipped ({len(spec.STOCK_SLA_FLIPS)}) or waived with a reason "
+        f"({len(spec.AM2_WAIVERS)})",
+        "unexplained " + ", ".join(f"sla {k} -> spell {v[0]} BaseLevel {v[1]}"
+                                   for k, v in sorted(unexplained.items())))
+    # And the flips must actually still be needed -- a stock data change that set one of them to
+    # 0 upstream would leave this file overriding a row for no reason.
+    stale = [sla_id for sla_id in spec.STOCK_SLA_FLIPS
+             if sla_id not in plan.stock_sla_acquire_methods
+             or plan.stock_sla_acquire_methods[sla_id] != 2]
+    checks.expect(not stale, "#21",
+                  f"all {len(spec.STOCK_SLA_FLIPS)} flipped rows really are AcquireMethod = 2 "
+                  f"in the stock DBC",
+                  f"already 0 upstream, override is dead weight: {stale}")
+    for sla_id, (sp, name, why) in sorted(spec.AM2_WAIVERS.items()):
+        checks.ok("#21", f"waived: sla {sla_id} -> {sp} {name} -- {why.split('.')[0]}.")
+
+
+def check_progression(plan, checks):
+    """#17 -- the level ladder itself: no gaps, no overlap, and a clean handoff at the top.
+
+    Everything about WHEN a rank arrives, checked against the DBC rather than against the spec's
+    own arithmetic. The failure this exists for is quiet: a rank whose level is above the stock
+    rank's is never reachable, and a chain whose last custom rank sits above the handoff means
+    the character is superseded onto stock data before the ladder finishes.
+    """
+    table = dbc_tables.SPELL_DBC
+    idx = plan.spell.index()
+    for ability in spec.ABILITIES:
+        levels = [r.level for r in ability.ranks]
+        checks.expect(levels[0] == ability.intro_level, "#17",
+                      f"{ability.name}: rank 1 is at level {levels[0]}, the brief's level")
+        checks.expect(all(b - a == spec.RANK_STEP for a, b in zip(levels, levels[1:])), "#17",
+                      f"{ability.name}: {len(levels)} ranks, one every {spec.RANK_STEP} levels "
+                      f"({levels[0]}..{levels[-1]})",
+                      f"levels {levels}")
+        checks.expect(levels[-1] < ability.handoff_level, "#17",
+                      f"{ability.name}: last custom rank (level {levels[-1]}) is below the "
+                      f"stock rank (level {ability.handoff_level}), gap "
+                      f"{ability.handoff_level - levels[-1]}")
+        checks.expect(ability.handoff_level - levels[-1] <= spec.RANK_STEP, "#17",
+                      f"{ability.name}: the gap to the stock rank is no wider than one rank "
+                      f"step, so there is no dead stretch of levels at the top")
+        # And the level really is what the emitted record says, not what the spec computed.
+        for rank in ability.ranks:
+            base = plan.spell.cell(idx[rank.spell_id], table.index_of["BaseLevel"])
+            slvl = plan.spell.cell(idx[rank.spell_id], table.index_of["SpellLevel"])
+            checks.expect(base == rank.level and slvl == rank.level, "#17",
+                          f"spell {rank.spell_id}: BaseLevel and SpellLevel are both "
+                          f"{rank.level}",
+                          f"BaseLevel {base}, SpellLevel {slvl}")
+
+        # #18 -- the handoff. The chain must run custom..custom, stock rank 1, ..stock rank N
+        # with the join exactly at the boundary and nothing of Blizzard's touched on the far
+        # side of it except the client-only subtext renumbering.
+        chain = ability.chain
+        join = len(ability.ranks)
+        checks.expect(chain[join - 1] == ability.ranks[-1].spell_id
+                      and chain[join] == ability.stock_chain[0], "#18",
+                      f"{ability.name}: chain rank {join} is custom {chain[join - 1]} and rank "
+                      f"{join + 1} is stock {chain[join]} -- immediately adjacent")
+        checks.expect(
+            all(sid not in plan.sql_rows["spell_dbc"] for sid in ability.stock_chain), "#18",
+            f"{ability.name}: no stock rank gets a spell_dbc override row, so from level "
+            f"{ability.handoff_level} the server reads Blizzard's own record")
+        if ability.learnable:
+            checks.expect(
+                (ability.handoff_level, ability.stock_chain[0]) in spec.progression_grants(),
+                "#18",
+                f"{ability.name}: the module grants stock {ability.stock_chain[0]} at level "
+                f"{ability.handoff_level}, so the handoff does not depend on mod-learn-spells")
+        else:
+            checks.expect(
+                not any(sid in {r.spell_id for r in ability.ranks} | set(ability.stock_chain)
+                        for _l, sid in spec.progression_grants()), "#18",
+                f"{ability.name}: nothing in this chain is ever granted -- it is cast by a core "
+                f"script, not learned")
+
+    # #24 -- a mirror chain must have EXACTLY as many ranks as the chain it mirrors.
+    by_key = {a.key: a for a in spec.ABILITIES}
+    for ability in spec.ABILITIES:
+        if not ability.mirror_of:
+            continue
+        principal = by_key[ability.mirror_of]
+        checks.expect(len(ability.chain) == len(principal.chain), "#24",
+                      f"{ability.name}: {len(ability.chain)} ranks, same as {principal.name}. "
+                      f"GetSpellWithRank (SpellMgr.cpp:650) walks this chain by the main-hand "
+                      f"rank number and dereferences node->next with no null check",
+                      f"{len(ability.chain)} vs {len(principal.chain)} -- "
+                      f"spell_dk_threat_of_thassarian would segfault the worldserver")
+        checks.expect(
+            [r.level for r in ability.ranks] == [r.level for r in principal.ranks], "#24",
+            f"{ability.name}: rank levels track {principal.name} exactly")
+
+    entries = spec.progression_entries()
+    lv = [e[0] for e in entries]
+    checks.expect(lv == sorted(lv), "#17",
+                  f"the progression table is sorted by level ({lv[0]}..{lv[-1]}); Reconcile() "
+                  f"breaks on the first entry above the player's level")
+    checks.expect(all(1 <= l <= 80 for l in lv), "#17", "every grant level is in 1..80")
+    for _lvl, sid, kind, _c in entries:
+        if kind == spec.GRANT_CUSTOM:
+            continue
+        checks.expect(sid in idx, "#17",
+                      f"stock grant {sid} ({_c}) exists in Spell.dbc")
+
+
+def check_value_curve(plan, checks):
+    """#19 -- values rise with rank, and the last custom rank is below the stock one.
+
+    A ladder that is not monotonic is a ladder where levelling up makes you weaker, and rounding
+    a linear curve at low values is exactly where that happens. Checked on the resolved
+    $m/$M pair rather than on the raw cells, because that pair is what the player sees and what
+    CalcValue rolls.
+    """
+    for ability in spec.ABILITIES:
+        for cell in ability.scaling:
+            series = []
+            for rank in ability.ranks:
+                ov = plan.rank_overrides(ability, rank)
+                series.append((rank.level, rank.spell_id)
+                              + plan.cell_range(ov[cell.base_points], ov[cell.die_sides]))
+            stock_lo, stock_hi = plan.cell_range(
+                plan.stock_cell(ability, cell.base_points),
+                plan.stock_cell(ability, cell.die_sides))
+            lows = [lo for _l, _s, lo, _hi in series]
+            highs = [hi for _l, _s, _lo, hi in series]
+            checks.expect(all(a < b for a, b in zip(lows, lows[1:])), "#19",
+                          f"{ability.name} {cell.base_points}: minimum rises with every rank "
+                          f"({lows[0]} -> {lows[-1]})",
+                          f"not strictly increasing: {lows}")
+            checks.expect(all(a < b for a, b in zip(highs, highs[1:])), "#19",
+                          f"{ability.name} {cell.base_points}: maximum rises with every rank "
+                          f"({highs[0]} -> {highs[-1]})",
+                          f"not strictly increasing: {highs}")
+            checks.expect(highs[-1] < stock_hi and lows[-1] < stock_lo, "#19",
+                          f"{ability.name} {cell.base_points}: the last custom rank "
+                          f"({lows[-1]}-{highs[-1]}) is weaker than stock rank 1 "
+                          f"({stock_lo}-{stock_hi}) -- no overlap at the handoff")
+            checks.expect(lows[0] >= 1, "#19",
+                          f"{ability.name} {cell.base_points}: rank 1 is a positive value "
+                          f"({lows[0]})",
+                          "the curve rounded a value to zero or below")
+
+    # The one hand-calibrated number in the feature, pinned. If a curve change ever moves it, the
+    # tooltip on a character that already exists on the live realm changes with it.
+    it = spec.ICY_TOUCH
+    lo, hi = plan.rank_ranges(it, it.ranks[0])[0][1:]
+    checks.expect((lo, hi) == (10, 12), "#19",
+                  "Icy Touch rank 1 is still 10-12, the value verified in production",
+                  f"the curve now produces {lo}-{hi}")
+
+
+def check_rune_costs(plan, checks):
+    """#20 -- cloning rank 1's RuneCostID really does give the stock rune cost.
+
+    Requirement: rune costs, cast times, cooldowns and ranges come across untouched from the
+    clone. Cast time, cooldown and range are single cells and cloning them is self-evident;
+    RuneCostID is an INDEX into SpellRuneCost.dbc, and every stock rank has a DIFFERENT index, so
+    "cloned" only means "correct" if all those rows hold the same numbers. They do -- but that is
+    an observation about the stock file, so it gets checked rather than assumed.
+    """
+    if not plan.rune_costs:
+        checks.skip("#20", "SpellRuneCost.dbc not present; rune cost identity not checked")
+        return
+    col = dbc_tables.SPELL_DBC.index_of["RuneCostID"]
+    idx = plan.spell.index()
+    for ability in spec.ABILITIES:
+        ids = [plan.spell.cell(idx[s], col) for s in ability.stock_chain]
+        costs = {plan.rune_costs.get(i) for i in ids}
+        checks.expect(len(costs) == 1 and None not in costs, "#20",
+                      f"{ability.name}: all {len(ids)} stock ranks cost "
+                      f"{next(iter(costs))} (blood/unholy/frost/runic power), so the clone's "
+                      f"RuneCostID {ids[0]} is the stock cost",
+                      f"rune costs differ across ranks: {dict(zip(ids, (plan.rune_costs.get(i) for i in ids)))}")
+        for rank in ability.ranks:
+            checks.expect(plan.spell.cell(idx[rank.spell_id], col) == ids[0], "#20",
+                          f"spell {rank.spell_id}: RuneCostID {ids[0]} came across from the "
+                          f"clone untouched")
+
+
+CORE_CORRECTIONS = os.path.join(
+    spec.REPO_ROOT, ".work", "ac-src", "src", "server", "game", "Spells",
+    "SpellInfoCorrections.cpp")
+
+
+def check_corrections_baked(checks, path=CORE_CORRECTIONS):
+    """#22 -- a clone loses every core fix keyed on the stock spell ID. Find them.
+
+    Cloning preserves everything matched by family, mask or icon -- which is the entire reason
+    for the design. It preserves NOTHING the core hardcodes by ID, and SpellInfoCorrections.cpp
+    is a wall of `ApplySpellFix({ id, id, ... }, ...)`. Today exactly one cloned ID appears
+    there (Horn of Winter, whose two mutations are baked into the clone as ordinary cells), but
+    "today" is a property of a pinned core, so re-grep it whenever the source is around.
+    """
+    if not os.path.exists(path):
+        checks.skip("#22", f"core source not present at {os.path.relpath(path, spec.REPO_ROOT)}; "
+                           "cannot re-grep SpellInfoCorrections for cloned spell ids")
+        return
+    text = open(path, encoding="utf-8", errors="replace").read()
+    fixed = set()
+    for args in re.findall(r"ApplySpellFix\(\s*\{([^}]*)\}", text, re.S):
+        fixed.update(int(m) for m in re.findall(r"\b(\d{3,6})\b", args))
+    for ability in spec.ABILITIES:
+        if ability.clone_from not in fixed:
+            checks.ok("#22", f"{ability.name}: stock {ability.clone_from} has no ID-keyed "
+                             f"SpellInfoCorrections entry, so the clone loses nothing")
+            continue
+        baked = bool(ability.extra_overrides)
+        waived = ability.clone_from in spec.CORRECTION_WAIVERS
+        checks.expect(baked or waived, "#22",
+                      f"{ability.name}: stock {ability.clone_from} HAS a SpellInfoCorrections "
+                      f"entry and the clone carries "
+                      + (f"{len(ability.extra_overrides)} baked cell override(s) "
+                         f"{sorted(ability.extra_overrides)}" if baked
+                         else f"an explicit waiver"),
+                      "the correction is keyed on the stock spell id and will not apply to the "
+                      "custom ranks -- bake it into extra_overrides or waive it in "
+                      "CORRECTION_WAIVERS with a reason")
+
+
+def check_script_binding(plan, db, checks):
+    """#23 -- every renumbered chain that has a script keeps it, on every rank.
+
+    LoadSpellScriptNames drops a `-id` row whole when `id` is no longer the first spell in its
+    chain (ObjectMgr.cpp:6377-6381), so renumbering silently unhooks the script from the STOCK
+    ranks as well as failing to hook it to the new ones. Two halves: the spec must cover every
+    script the live table has for a chain we touch, and the emitted rows must cover every spell
+    in that chain.
+    """
+    spec_scripts = {}
+    for ability in spec.ABILITIES:
+        for script in ability.scripts:
+            spec_scripts.setdefault(ability.clone_from, set()).add(script)
+
+    for script, negative, chain in plan.script_binds:
+        ability = next(a for a in spec.ABILITIES if -negative == a.clone_from)
+        checks.expect(set(chain) == set(ability.chain), "#23",
+                      f"{script}: bound to all {len(chain)} ranks of the renumbered "
+                      f"{ability.name} chain, custom and stock")
+
+    if db is None or not db.live():
+        checks.skip("#23", "no live DB: cannot re-derive which chains have script rows")
+        return
+    touched = {s for a in spec.ABILITIES for s in a.chain}
+    rows = db.query("SELECT spell_id, ScriptName FROM spell_script_names WHERE ABS(spell_id) IN ("
+                    + ", ".join(str(s) for s in sorted(touched)) + ")")
+    live = {}
+    for sid, name in rows:
+        live.setdefault(abs(int(sid)), set()).add(name)
+    for ability in spec.ABILITIES:
+        needed = set()
+        for sid in ability.chain:
+            needed |= live.get(sid, set())
+        declared = set(ability.scripts)
+        checks.expect(needed <= declared, "#23",
+                      f"{ability.name}: the spec re-points every script the live table binds to "
+                      f"this chain ({sorted(declared) or 'none'})",
+                      f"live table also has {sorted(needed - declared)} -- renumbering would "
+                      f"drop it for every rank, including the level-80 one")
 
 
 def check_sql_matches_dbc(sql_paths, dbcs, plan, checks):
@@ -1228,6 +1816,7 @@ def check_reapplyable(sql_paths, checks):
         "player_class_stats": ("Class", "Level"), "spell_ranks": ("first_spell_id", "rank"),
         "spell_bonus_data": ("entry",), "playercreateinfo": ("race", "class"),
         "playercreateinfo_action": ("race", "class", "button"),
+        "spell_script_names": ("spell_id", "ScriptName"),
     }
     for path in sql_paths:
         deleted = set()
@@ -1511,6 +2100,12 @@ def do_emit(args, checks):
     check_ranks(plan, checks)
     check_chain_not_orphaning(plan, db, checks)
     check_acquire_methods(plan, checks)
+    check_acquire_method_derivation(plan, db, checks)
+    check_progression(plan, checks)
+    check_value_curve(plan, checks)
+    check_rune_costs(plan, checks)
+    check_corrections_baked(checks)
+    check_script_binding(plan, db, checks)
     check_template_kits(plan, db, checks)
 
     print(f"\n== SQL -> {os.path.relpath(spec.SQL_DIR, spec.REPO_ROOT)}")
@@ -1575,7 +2170,7 @@ def do_emit(args, checks):
     for e in manifest["outputs"]:
         print(f"   {e['sha256'][:16]}  {e['bytes']:>10,}  {e['path']}")
 
-    _print_damage_table()
+    _print_damage_table(plan)
     return checks.summary()
 
 
@@ -1596,13 +2191,23 @@ def _check_header(path, checks):
                   f"header {sorted(got)} spec {sorted(want)}")
 
 
-def _print_damage_table():
-    print("\n== damage produced by the emitted rows")
+def _print_damage_table(plan):
+    print("\n== values produced by the emitted rows (stock rank 1 on the last line of each)")
     for ability in spec.ABILITIES:
+        print(f"   {ability.name}  ->  stock {ability.stock_chain[0]} at level "
+              f"{ability.handoff_level}")
         for r in ability.ranks:
-            print(f"   spell {r.spell_id}  {ability.key} {r.subtext}  level {r.level}  "
-                  f"EffectBasePoints_1={r.base_points} EffectDieSides_1={r.die_sides}  "
-                  f"-> $m1..$M1 = {r.damage_min} to {r.damage_max}")
+            ov = plan.rank_overrides(ability, r)
+            cells = "  ".join(f"{c.base_points.replace('EffectBasePoints_', 'bp')}="
+                              f"{ov[c.base_points]}/"
+                              f"{ov[c.die_sides]}" for c in ability.scaling)
+            print(f"     {r.spell_id}  {r.subtext:<8} level {r.level:>2}  {cells:<24}"
+                  f"-> {plan.rank_summary(ability, r)}")
+        stock = "  ".join(
+            f"{lo}-{hi} {c.what}" if lo != hi else f"{lo} {c.what}"
+            for c, lo, hi in plan.stock_ranges(ability))
+        print(f"     {ability.stock_chain[0]}  Rank {len(ability.ranks) + 1:<3} "
+              f"level {ability.handoff_level:>2}  {'(stock)':<24}-> {stock}")
 
 
 def do_check(args, checks):
@@ -1651,7 +2256,8 @@ def do_check(args, checks):
     have_stock = os.path.isdir(args.dbc_in)
 
     if not have_stock:
-        for tag in ("#2", "#3", "#4", "#5", "#6", "#12", "#16"):
+        for tag in ("#2", "#3", "#4", "#5", "#6", "#12", "#16", "#17", "#18", "#19",
+                    "#20", "#21", "#22", "#23", "#24"):
             checks.skip(tag, f"stock DBCs not readable at {args.dbc_in}; "
                              "pass --dbc-in to enable the DBC-side checks")
         return checks.summary()
@@ -1666,9 +2272,16 @@ def do_check(args, checks):
     else:
         checks.skip("#5", "no live DB: cannot check the DELETE against today's spell_ranks")
     check_acquire_methods(plan, checks)
+    check_progression(plan, checks)
+    check_value_curve(plan, checks)
+    check_rune_costs(plan, checks)
+    check_corrections_baked(checks)
+    check_script_binding(plan, db if live else None, checks)
     if live:
+        check_acquire_method_derivation(plan, db, checks)
         check_template_kits(plan, db, checks)
     else:
+        checks.skip("#21", "no live DB: cannot re-derive the AcquireMethod = 2 set")
         checks.skip("#16", "no live DB: cannot re-derive the per-race template kits")
 
     if have_emitted:
@@ -1695,7 +2308,7 @@ def do_check(args, checks):
         checks.skip("hash", f"no {os.path.relpath(manifest_path, spec.REPO_ROOT)}; "
                             "run the generator to produce one")
 
-    _print_damage_table()
+    _print_damage_table(plan)
     return checks.summary()
 
 
