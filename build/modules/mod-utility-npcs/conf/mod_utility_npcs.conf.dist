@@ -1,0 +1,58 @@
+[worldserver]
+
+########################################################################################
+# mod-utility-npcs
+#
+# Spawns the realm's six utility NPCs at every inn, at every starting zone, and at
+# fourteen surprise locations. See docs/utility-npcs.md for who they are and where.
+#
+# This file MUST exist: modules/CMakeLists.txt builds the compile-time CONFIG_FILE_LIST
+# from `file(GLOB ${MODULE_CONFIG_PATH}/*.conf.dist)` with the .dist stripped, so a
+# module with no conf.dist never gets its .conf read at all.
+#
+# The value below is also the module's compiled-in default (utility_npcs.cpp
+# UtilityNpcsConfig::Load). Keep the two in sync: on this deployment
+# deploy/docker-compose.yml bind-mounts conf/modules over /opt/ac/etc/modules, which
+# shadows the installed copy of this file entirely, so an operator who omits the key
+# gets the compiled default rather than what is written here.
+#
+# No inline comments anywhere in this file. The parser has no inline-comment handling --
+# `Key = 1  # note` reads the value as the whole string after the `=`.
+########################################################################################
+
+#
+#    UtilityNPCs.Enable
+#        Description: Master switch for the 734 spawns in reserved creature.guid block
+#                     10000000..10099999.
+#
+#                     WHAT 0 ACTUALLY DOES, AND WHAT IT DOES NOT. The rows are DATA. They
+#                     stay in the `creature` table either way -- there is no "enabled"
+#                     column on a creature spawn and this module will not delete rows
+#                     behind an operator's back. At 0 the module instead calls
+#                     Unit::SetVisible(false) on every spawn in the reserved block as its
+#                     grid loads, which raises its visibility requirement to
+#                     SEC_GAMEMASTER: players cannot see it, target it, or talk to it,
+#                     while a GM still can.
+#
+#                     THE FLIP IS NOT INSTANT. AllCreatureScript::OnCreatureAddWorld runs
+#                     once per creature per GRID LOAD, so a `.reload config` applies to
+#                     each spawn the next time its grid loads -- which for a busy city inn
+#                     may be never while players are standing in it. Restart the
+#                     worldserver to apply it everywhere at once. That trade is deliberate:
+#                     the instant version costs a virtual dispatch per creature per world
+#                     tick, forever, and this realm runs playerbots.
+#
+#                     Turning this off does NOT uninstall the six NPCs. Their scripts,
+#                     templates and gossip come from their own modules (mod-transmog,
+#                     mod-npc-free-professions, mod-instance-reset, mod-npc-enchanter,
+#                     mod-assistant) and any spawn of theirs OUTSIDE the reserved block --
+#                     a GM `.npc add`, for instance -- is untouched.
+#
+#                     To remove the rows entirely rather than hide them: drop this module
+#                     from build/modules/, then
+#                     `DELETE FROM creature WHERE guid BETWEEN 10000000 AND 10099999;`
+#                     and delete the migration's row from the `updates` table.
+#        Default:     1 (enabled)
+#
+
+UtilityNPCs.Enable = 1

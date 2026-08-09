@@ -1,0 +1,25 @@
+# The repo-root .gitignore has a bare `data/` line, which — having no leading slash — matches a
+# directory named `data` at ANY depth. It is there for the extracted client data at the repo root
+# (a few GB of maps/vmaps/dbc), but it also silently swallows this module's
+# data/sql/db-world/**.sql, which is a git-tracked artefact that MUST ship. Losing it means the
+# NPCs never spawn.
+#
+# The symptom if this file is missing is nasty and delayed: `docker build` sends the whole working
+# tree as context, so a LOCAL build picks the SQL up and the spawns appear — while CI, which
+# builds from a clean `git clone`, produces an image with no module SQL at all and a worldserver
+# that boots fine, logs "mod-utility-npcs: 0 spawns in the reserved block, expected 734", and
+# spawns nothing. `git status` never mentions the missing files.
+#
+# A nested .gitignore's patterns take precedence over the parent's for paths beneath it, so
+# re-including the directory here is enough (re-including only the *.sql files would not be —
+# git never descends into an excluded directory). Same fix as mod-dk-lowlevel/.gitignore.
+#
+# The tidier fix is to anchor the root pattern as `/data/`. Do that instead and delete this line
+# from both modules.
+!/data/
+
+# Byte-compiled output of tools/*.py. build/.dockerignore excludes it from the image too; both are
+# needed, because the two files answer different questions (what git tracks vs. what busts the
+# Docker layer cache above the 30-minute compile).
+__pycache__/
+*.pyc
