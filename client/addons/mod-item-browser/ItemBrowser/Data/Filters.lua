@@ -6,77 +6,126 @@
 -- where the stock auction house gets the strings in its own dropdowns. Only classes
 -- and subclasses that at least one item actually uses are listed, so the menus never
 -- offer a category that cannot return a row.
+--
+-- Each subcategory carries a fourth field: the inventory slots that subcategory's
+-- items ACTUALLY occupy, as flat (InventoryType, count) pairs in ascending slot
+-- order. That is the tree's third tier, the same one the auction house builds from
+-- GetAuctionInvTypes(). Counted from the rows rather than assumed, so 'Bows' offers
+-- Ranged and nothing else, and no branch can be opened onto an empty list.
 ItemBrowserData.categoryOrder = {
   0,1,2,3,4,5,6,7,8,9,10,11,12,13,15,16,
 }
 
 ItemBrowserData.category = {
   [0] = { name = "Consumable", count = 2410, sub = {
-    {0,743,"Consumable"},{1,150,"Potion"},{2,88,"Elixir"},{3,43,"Flask"},{4,53,"Scroll"},
-    {5,495,"Food & Drink"},{6,328,"Item Enhancement"},{7,32,"Bandage"},{8,478,"Other"},
+    {0,743,"Consumable",{0,725,1,3,2,1,3,2,6,1,7,2,8,1,14,2,16,1,20,1,21,1,23,1,26,2}},
+    {1,150,"Potion",{0,150}},{2,88,"Elixir",{0,88}},{3,43,"Flask",{0,43}},
+    {4,53,"Scroll",{0,53}},{5,495,"Food & Drink",{0,495}},{6,328,"Item Enhancement",{0,328}},
+    {7,32,"Bandage",{0,32}},{8,478,"Other",{0,477,22,1}},
   } },
   [1] = { name = "Container", count = 148, sub = {
-    {0,109,"Bag"},{1,11,"Soul Bag"},{2,7,"Herb Bag"},{3,6,"Enchanting Bag"},
-    {4,4,"Engineering Bag"},{5,2,"Gem Bag"},{6,3,"Mining Bag"},{7,3,"Leatherworking Bag"},
-    {8,3,"Inscription Bag"},
+    {0,109,"Bag",{0,1,18,108}},{1,11,"Soul Bag",{18,11}},{2,7,"Herb Bag",{18,7}},
+    {3,6,"Enchanting Bag",{18,6}},{4,4,"Engineering Bag",{18,4}},{5,2,"Gem Bag",{18,2}},
+    {6,3,"Mining Bag",{18,3}},{7,3,"Leatherworking Bag",{18,3}},{8,3,"Inscription Bag",{18,3}},
   } },
   [2] = { name = "Weapon", count = 6651, sub = {
-    {0,490,"One-Handed Axes"},{1,418,"Two-Handed Axes"},{2,308,"Bows"},{3,253,"Guns"},
-    {4,695,"One-Handed Maces"},{5,371,"Two-Handed Maces"},{6,266,"Polearms"},
-    {7,767,"One-Handed Swords"},{8,460,"Two-Handed Swords"},{10,790,"Staves"},
-    {11,3,"One-Handed Exotics"},{13,232,"Fist Weapons"},{14,146,"Miscellaneous"},
-    {15,802,"Daggers"},{16,135,"Thrown"},{17,3,"Spears"},{18,158,"Crossbows"},{19,339,"Wands"},
-    {20,15,"Fishing Poles"},
+    {0,490,"One-Handed Axes",{13,404,17,4,21,48,22,32,25,1,26,1}},
+    {1,418,"Two-Handed Axes",{13,20,17,397,22,1}},{2,308,"Bows",{13,1,15,303,26,4}},
+    {3,253,"Guns",{21,1,26,252}},{4,695,"One-Handed Maces",{13,420,17,3,21,256,22,16}},
+    {5,371,"Two-Handed Maces",{0,1,13,17,17,352,21,1}},{6,266,"Polearms",{13,6,17,259,25,1}},
+    {7,767,"One-Handed Swords",{0,2,13,580,17,2,21,163,22,20}},
+    {8,460,"Two-Handed Swords",{13,36,17,421,21,2,22,1}},{10,790,"Staves",{13,5,17,782,21,3}},
+    {11,3,"One-Handed Exotics",{17,2,21,1}},
+    {13,232,"Fist Weapons",{13,60,17,1,21,87,22,83,26,1}},
+    {14,146,"Miscellaneous",{0,3,10,1,13,98,17,12,21,24,22,5,23,3}},
+    {15,802,"Daggers",{13,583,17,2,21,179,22,38}},{16,135,"Thrown",{17,2,25,131,26,2}},
+    {17,3,"Spears",{17,3}},{18,158,"Crossbows",{15,1,26,157}},{19,339,"Wands",{26,339}},
+    {20,15,"Fishing Poles",{17,15}},
   } },
   [3] = { name = "Gem", count = 677, sub = {
-    {0,95,"Red"},{1,50,"Blue"},{2,80,"Yellow"},{3,95,"Purple"},{4,119,"Green"},{5,146,"Orange"},
-    {6,54,"Meta"},{7,26,"Simple"},{8,12,"Prismatic"},
+    {0,95,"Red",{0,95}},{1,50,"Blue",{0,50}},{2,80,"Yellow",{0,80}},{3,95,"Purple",{0,95}},
+    {4,119,"Green",{0,119}},{5,146,"Orange",{0,146}},{6,54,"Meta",{0,54}},
+    {7,26,"Simple",{0,26}},{8,12,"Prismatic",{0,12}},
   } },
   [4] = { name = "Armor", count = 23578, sub = {
-    {0,3846,"Miscellaneous"},{1,5721,"Cloth"},{2,4519,"Leather"},{3,4292,"Mail"},
-    {4,4264,"Plate"},{6,686,"Shields"},{7,72,"Librams"},{8,79,"Idols"},{9,76,"Totems"},
-    {10,23,"Sigils"},
+    {0,3846,"Miscellaneous",{0,20,1,77,2,886,3,6,4,121,5,6,6,27,7,7,8,46,9,5,10,5,11,1247,12,762,13,1,16,5,17,4,19,87,20,44,23,479,28,11}},
+    {1,5721,"Cloth",{0,1,1,590,3,557,5,206,6,469,7,657,8,500,9,444,10,603,16,1068,20,626}},
+    {2,4519,"Leather",{1,559,3,558,5,565,6,491,7,641,8,513,9,455,10,623,15,1,20,113}},
+    {3,4292,"Mail",{1,527,3,540,5,606,6,472,7,600,8,485,9,446,10,579,20,37}},
+    {4,4264,"Plate",{1,587,3,565,4,2,5,640,6,418,7,620,8,454,9,388,10,587,20,3}},
+    {6,686,"Shields",{14,686}},{7,72,"Librams",{28,72}},{8,79,"Idols",{28,79}},
+    {9,76,"Totems",{28,76}},{10,23,"Sigils",{28,23}},
   } },
   [5] = { name = "Reagent", count = 4, sub = {
-    {0,4,"Reagent"},
+    {0,4,"Reagent",{0,4}},
   } },
   [6] = { name = "Projectile", count = 74, sub = {
-    {2,34,"Arrow"},{3,40,"Bullet"},
+    {2,34,"Arrow",{24,34}},{3,40,"Bullet",{21,1,24,39}},
   } },
   [7] = { name = "Trade Goods", count = 927, sub = {
-    {0,12,"Trade Goods"},{1,81,"Parts"},{2,47,"Explosives"},{3,59,"Devices"},
-    {4,39,"Jewelcrafting"},{5,40,"Cloth"},{6,68,"Leather"},{7,70,"Metal & Stone"},
-    {8,165,"Meat"},{9,54,"Herb"},{10,47,"Elemental"},{11,176,"Other"},{12,60,"Enchanting"},
-    {13,3,"Materials"},{14,3,"Armor Enchantment"},{15,3,"Weapon Enchantment"},
+    {0,12,"Trade Goods",{0,12}},{1,81,"Parts",{0,81}},{2,47,"Explosives",{0,47}},
+    {3,59,"Devices",{0,58,12,1}},{4,39,"Jewelcrafting",{0,39}},{5,40,"Cloth",{0,40}},
+    {6,68,"Leather",{0,68}},{7,70,"Metal & Stone",{0,70}},{8,165,"Meat",{0,163,23,2}},
+    {9,54,"Herb",{0,54}},{10,47,"Elemental",{0,47}},{11,176,"Other",{0,164,12,12}},
+    {12,60,"Enchanting",{0,60}},{13,3,"Materials",{0,3}},{14,3,"Armor Enchantment",{0,3}},
+    {15,3,"Weapon Enchantment",{0,3}},
   } },
   [8] = { name = "Generic(OBSOLETE)", count = 1, sub = {
-    {0,1,"Generic(OBSOLETE)"},
+    {0,1,"Generic(OBSOLETE)",{0,1}},
   } },
   [9] = { name = "Recipe", count = 3066, sub = {
-    {0,943,"Book"},{1,395,"Leatherworking"},{2,306,"Tailoring"},{3,134,"Engineering"},
-    {4,287,"Blacksmithing"},{5,152,"Cooking"},{6,141,"Alchemy"},{7,13,"First Aid"},
-    {8,210,"Enchanting"},{9,5,"Fishing"},{10,480,"Jewelcrafting"},
+    {0,943,"Book",{0,943}},{1,395,"Leatherworking",{0,395}},{2,306,"Tailoring",{0,306}},
+    {3,134,"Engineering",{0,134}},{4,287,"Blacksmithing",{0,287}},{5,152,"Cooking",{0,152}},
+    {6,141,"Alchemy",{0,141}},{7,13,"First Aid",{0,13}},{8,210,"Enchanting",{0,210}},
+    {9,5,"Fishing",{0,5}},{10,480,"Jewelcrafting",{0,480}},
   } },
   [10] = { name = "Money", count = 25, sub = {
-    {0,24,"Money(OBSOLETE)"},{7,1,"Subclass 7"},
+    {0,24,"Money(OBSOLETE)",{0,24}},{7,1,"Subclass 7",{0,1}},
   } },
   [11] = { name = "Quiver", count = 34, sub = {
-    {2,19,"Quiver"},{3,15,"Ammo Pouch"},
+    {2,19,"Quiver",{18,19}},{3,15,"Ammo Pouch",{18,15}},
   } },
   [12] = { name = "Quest", count = 5167, sub = {
-    {0,5165,"Quest"},{3,1,"Subclass 3"},{8,1,"Subclass 8"},
+    {0,5165,"Quest",{0,5136,1,8,2,4,8,1,11,1,12,6,16,1,20,1,21,1,23,3,26,3}},
+    {3,1,"Subclass 3",{26,1}},{8,1,"Subclass 8",{0,1}},
   } },
   [13] = { name = "Key", count = 129, sub = {
-    {0,123,"Key"},{1,6,"Lockpick"},
+    {0,123,"Key",{0,123}},{1,6,"Lockpick",{0,6}},
   } },
   [15] = { name = "Miscellaneous", count = 2843, sub = {
-    {0,2119,"Junk"},{1,47,"Reagent"},{2,191,"Pet"},{3,129,"Holiday"},{4,36,"Other"},
-    {5,320,"Mount"},{12,1,"Subclass 12"},
+    {0,2119,"Junk",{0,2070,5,2,9,4,11,1,12,1,21,1,22,2,23,38}},{1,47,"Reagent",{0,47}},
+    {2,191,"Pet",{0,191}},{3,129,"Holiday",{0,129}},{4,36,"Other",{0,36}},
+    {5,320,"Mount",{0,320}},{12,1,"Subclass 12",{0,1}},
   } },
   [16] = { name = "Glyph", count = 364, sub = {
-    {1,35,"Warrior"},{2,34,"Paladin"},{3,35,"Hunter"},{4,35,"Rogue"},{5,34,"Priest"},
-    {6,35,"Death Knight"},{7,37,"Shaman"},{8,37,"Mage"},{9,35,"Warlock"},{11,47,"Druid"},
+    {1,35,"Warrior",{0,35}},{2,34,"Paladin",{0,34}},{3,35,"Hunter",{0,35}},
+    {4,35,"Rogue",{0,35}},{5,34,"Priest",{0,34}},{6,35,"Death Knight",{0,35}},
+    {7,37,"Shaman",{0,37}},{8,37,"Mage",{0,37}},{9,35,"Warlock",{0,35}},{11,47,"Druid",{0,47}},
   } },
+}
+
+-- InventoryType -> the SUFFIX of the client global that names the slot; the addon
+-- shows _G["INVTYPE_" .. token], so the words are the client's and the locale's, not
+-- this tool's. Ids checked against the core's enum InventoryType and every token
+-- checked against the client's own GlobalStrings.lua (invariant #14).
+--
+-- Several tokens deliberately share a label: INVTYPE_RANGED and INVTYPE_RANGEDRIGHT
+-- are both "Ranged", CHEST and ROBE are both "Chest", SHIELD and WEAPONOFFHAND are
+-- both "Off Hand". The tree groups slots by the LABEL, so those collapse into one
+-- clickable row that filters on all of the ids behind it.
+ItemBrowserData.slotToken = {
+  [1]="HEAD",[2]="NECK",[3]="SHOULDER",[4]="BODY",[5]="CHEST",[6]="WAIST",[7]="LEGS",[8]="FEET",
+  [9]="WRIST",[10]="HAND",[11]="FINGER",[12]="TRINKET",[13]="WEAPON",[14]="SHIELD",
+  [15]="RANGED",[16]="CLOAK",[17]="2HWEAPON",[18]="BAG",[19]="TABARD",[20]="ROBE",
+  [21]="WEAPONMAINHAND",[22]="WEAPONOFFHAND",[23]="HOLDABLE",[24]="AMMO",[25]="THROWN",
+  [26]="RANGEDRIGHT",[27]="QUIVER",[28]="RELIC",
+}
+
+-- The live maxima, so the level sliders span exactly what the database contains
+-- rather than a guessed 1..80. reqLevel is above 80 for a handful of internal rows.
+ItemBrowserData.limits = {
+  reqLevel = 100,
+  itemLevel = 435,
 }
 
 -- Pooled (AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank), four

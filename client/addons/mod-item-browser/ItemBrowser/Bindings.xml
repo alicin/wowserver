@@ -1,0 +1,11 @@
+<Bindings>
+    <!--
+      Picked up automatically by the client from the addon's folder: Bindings.xml is never
+      listed in the .toc, and listing it there would load it twice. The readable names the
+      Key Bindings panel shows come from BINDING_HEADER_ITEMBROWSER and
+      BINDING_NAME_ITEMBROWSER_TOGGLE, set in UI.lua's OnLoad.
+    -->
+    <Binding name="ITEMBROWSER_TOGGLE" header="ITEMBROWSER">
+        ItemBrowser_Toggle()
+    </Binding>
+</Bindings>

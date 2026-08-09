@@ -347,8 +347,19 @@ class Plan:
         for cell in ability.scaling:
             base = self.stock_cell(ability, cell.base_points)
             die = self.stock_cell(ability, cell.die_sides)
+            # INVARIANT #24, inline: the spec's weapon_flat flag must agree with what
+            # Spell.dbc actually says the effect is. The flag picks which power curve applies,
+            # and getting it wrong is silent -- the numbers just come out at roughly double or
+            # half. Deriving the truth here means the spec cannot drift from the DBC.
+            eff_index = cell.base_points.rsplit("_", 1)[1]
+            eff_type = self.stock_cell(ability, f"Effect_{eff_index}")
+            is_weapon = eff_type in spec.WEAPON_DAMAGE_EFFECTS
+            if is_weapon != cell.weapon_flat:
+                raise SystemExit(
+                    f"[FAIL] #24 {ability.key} {cell.base_points}: Effect_{eff_index}="
+                    f"{eff_type} says weapon_flat={is_weapon}, spec says {cell.weapon_flat}")
             out[cell.base_points], out[cell.die_sides] = spec.scale_cell(
-                base, die, rank.level, ability.handoff_level)
+                base, die, rank.level, ability.handoff_level, cell.weapon_flat)
         out.update(ability.extra_overrides)
         return out
 

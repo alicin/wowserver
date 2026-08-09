@@ -9,6 +9,9 @@ THE FILTER SET is the stock 3.3.5 auction house's, over the local database:
 
     category / subcategory   item_template class + subclass, labelled from the client's own
                              ItemClass.dbc / ItemSubClass.dbc (see Data/Filters.lua)
+    slot                     InventoryType, as a SET: the tree groups slots by the label the
+                             client gives them, and "Off Hand" is two ids (INVTYPE_SHIELD and
+                             INVTYPE_WEAPONOFFHAND), "Chest" is two more (CHEST and ROBE)
     quality                  minimum, the way the AH's dropdown works
     required level           min .. max, the AH's "Level Range" boxes
     item level               min .. max, which the AH does not have and a GM wants
@@ -39,9 +42,10 @@ Three separate things, because there are three separate costs.
    table.sort runs on its default numeric comparator (C) rather than on a Lua function.
 
 WORST CASE, after all of that: no name, no filters, everything matches -> a 46,098-element
-array of integers. That is fine to hold and fine to page, because the window instantiates
-thirteen row widgets and re-fills them from an offset; the size of the result list never
-changes how much drawing happens.
+array of integers, plus one sort over it if the order is anything but the default. That is
+fine to hold and fine to page, because the window instantiates only as many row widgets as
+fit on screen (about two dozen) and re-fills them from an offset; the size of the result list
+never changes how much drawing happens.
 
 RANKING. Substring matching alone puts "Bolt of Linen Cloth" above "Linen Cloth" for the
 query "linen", which is the wrong answer every time. Matches are bucketed by how well they
@@ -58,6 +62,30 @@ then ascending item id (stable, and roughly chronological by expansion). So "lin
 Linen Bag, Linen Belt, Linen Boots, ... and puts "Bolt of Linen Cloth" below all of them --
 which is the whole point -- but it does NOT promote Linen Cloth over Linen Cloak, because by
 this rule nothing distinguishes them.
+
+SORTING, and why every order is a NUMBER
+----------------------------------------
+"Best match" is the ranking above. The other orders -- item level, required level, quality,
+name, item id, each way up -- are one table.sort over the matched rows, and every one of them
+sorts a single packed number so table.sort uses its built-in C comparator:
+
+    key = value * KEY_ROW + rowIndex          ascending
+    key = (limit - value) * KEY_ROW + rowIndex descending
+
+The row index rides in the low bits, so ties break by ascending item id and the order is
+stable without a comparator function. A Lua comparator over 46,098 rows is ~715,000 calls
+back into the interpreter; the packed key turns that into a C-level number compare, and it is
+the difference between a sort you notice and one you do not.
+
+Sorting by NAME cannot pack a string into that key, so it uses a rank instead, by one of two
+routes depending on how much there is to sort:
+
+  * up to NAME_SORT_DIRECT matches -- which is almost every search that has any filter set at
+    all -- a plain comparator over the lowercased names. Nothing is retained.
+  * more than that, a one-off rank of the entire catalogue (nameOrder[row] = its position in
+    A-Z order) is built once and then reused for the rest of the session. It costs one big
+    sort and ~370 KB, and it is what stops "sort the whole 46,098-row table by name" from
+    being a fresh half-second stall every time the filters change.
 ------------------------------------------------------------------------------------------]]
 
 ItemBrowserSearch = {}
@@ -69,6 +97,7 @@ local floor, find, lower, sort = math.floor, string.find, string.lower, table.so
 
 local MAX_RANKED = 5000        -- name matches kept for ranking; beyond this we only count
 local MIN_QUERY = 2            -- below this a name query matches half the table
+local NAME_SORT_DIRECT = 4000  -- above this, A-Z uses the cached whole-catalogue rank
 
 -- Sort key = (tier * 256 + nameLength) * KEY_ROW + rowIndex, one number, so table.sort uses
 -- its built-in numeric comparator instead of calling back into Lua 46k*log(46k) times.
@@ -80,6 +109,7 @@ local MAX_NAME_LEN = 255
 -- scan loop's upvalue lookups are as cheap as Lua makes them.
 local DIV = D.DIV
 local W_QUALITY               = DIV.quality[2]    -- quality is the low field: m % W_QUALITY
+local D_INVTYPE, W_INVTYPE    = DIV.invtype[1],   DIV.invtype[2]
 local D_CLASS                 = DIV.class[1]
 local D_REQLEVEL, W_REQLEVEL  = DIV.reqlevel[1],  DIV.reqlevel[2]
 local D_ITEMLVL,  W_ITEMLVL   = DIV.itemlevel[1], DIV.itemlevel[2]
@@ -94,6 +124,128 @@ local W_CLASSPAIR = 1024
 -- the scan uses, so even the very first keystroke never blocks.
 local lowerName = {}
 local lowerBuilt = 0
+
+-- row index -> its position in A-Z order, built at most once per session. See the header.
+local nameOrder = nil
+
+
+-- =========================================================================================
+-- the sort orders
+-- =========================================================================================
+
+--- The orders the list can be in. `field` is what the key is built from; `limit` is one past
+--- that field's largest possible value, which is what turns an ascending key into a
+--- descending one. Order here is the order the Sort menu offers them in.
+--
+-- "match" is not a field: with a name typed it means the relevance tiering described in the
+-- header, and with nothing typed there is nothing to rank, so it means ascending item id --
+-- which is the order the arrays are already in and therefore free.
+ItemBrowserSearch.orders = {
+    { key = "match",   label = "Best match",    both = false },
+    { key = "ilvl",    label = "Item level",    field = "itemlevel", limit = W_ITEMLVL },
+    { key = "req",     label = "Required level", field = "reqlevel", limit = W_REQLEVEL },
+    { key = "quality", label = "Quality",       field = "quality",   limit = W_QUALITY },
+    -- Sorting by slot sorts by InventoryType, which is head-first and relic-last: the order
+    -- the character pane lays its own slots out in, not alphabetical order.
+    { key = "slot",    label = "Slot",          field = "invtype",   limit = W_INVTYPE },
+    { key = "name",    label = "Name",          field = "name" },
+    { key = "id",      label = "Item ID",       field = "id" },
+}
+
+local ORDER = {}
+for i = 1, #ItemBrowserSearch.orders do
+    ORDER[ItemBrowserSearch.orders[i].key] = ItemBrowserSearch.orders[i]
+end
+
+function ItemBrowserSearch:Order(key)
+    return ORDER[key] or ORDER.match
+end
+
+--- nameOrder, built once. Needs the lowercase index finished, which Step() guarantees.
+local function BuildNameOrder()
+    local names = lowerName
+    local index = {}
+    for i = 1, D.rows do index[i] = i end
+    sort(index, function(a, b)
+        local na, nb = names[a], names[b]
+        -- Equal names are not rare (the same item id range holds several "Fishing Pole"), so
+        -- the tiebreak has to be here as well; without it table.sort's order for equal keys
+        -- is unspecified and the list would reshuffle between identical searches.
+        if na == nb then return a < b end
+        return na < nb
+    end)
+    local rank = {}
+    for position = 1, #index do rank[index[position]] = position end
+    nameOrder = rank
+end
+
+--- Put job.out (row indices) into the requested order. One table.sort, always numeric except
+--- for the small-result name case.
+local function ApplySort(job)
+    local out, n, desc = job.out, job.n, job.desc
+    local order = ORDER[job.sort] or ORDER.match
+
+    if order.key == "match" or order.field == "id" then
+        -- Nothing to do: "Item ID" is the order the arrays are already in and the scan
+        -- appended in, and "Best match" has either just been ranked or means the same thing.
+        -- Reversing in place is the whole cost of the descending version.
+        if desc then
+            for i = 1, floor(n / 2) do out[i], out[n + 1 - i] = out[n + 1 - i], out[i] end
+        end
+        return
+    end
+
+    if order.field == "name" then
+        if n <= NAME_SORT_DIRECT then
+            local names = lowerName
+            if desc then
+                sort(out, function(a, b)
+                    local na, nb = names[a], names[b]
+                    if na == nb then return a < b end
+                    return na > nb
+                end)
+            else
+                sort(out, function(a, b)
+                    local na, nb = names[a], names[b]
+                    if na == nb then return a < b end
+                    return na < nb
+                end)
+            end
+            return
+        end
+        if not nameOrder then BuildNameOrder() end
+        local rank, limit = nameOrder, D.rows + 1
+        for i = 1, n do
+            local row = out[i]
+            local value = rank[row]
+            if desc then value = limit - value end
+            out[i] = value * KEY_ROW + row
+        end
+        sort(out)
+        for i = 1, n do out[i] = out[i] % KEY_ROW end
+        return
+    end
+
+    -- The numeric fields: one arithmetic pull out of the packed record per row, then one
+    -- numeric sort.
+    local packed = D.packed
+    local divisor, width, limit = 1, W_QUALITY, order.limit
+    if order.field == "itemlevel" then
+        divisor, width = D_ITEMLVL, W_ITEMLVL
+    elseif order.field == "reqlevel" then
+        divisor, width = D_REQLEVEL, W_REQLEVEL
+    elseif order.field == "invtype" then
+        divisor, width = D_INVTYPE, W_INVTYPE
+    end
+    for i = 1, n do
+        local row = out[i]
+        local value = floor(packed[row] / divisor) % width
+        if desc then value = limit - value end
+        out[i] = value * KEY_ROW + row
+    end
+    sort(out)
+    for i = 1, n do out[i] = out[i] % KEY_ROW end
+end
 
 
 -- =========================================================================================
@@ -197,8 +349,9 @@ end
 local EMPTY = {}
 
 --- Start a search. Cheap: it validates the filter and sets up state, and scans nothing.
--- @param filter table -- text, class, subclass, minQuality, minLevel, maxLevel,
---                        minItemLevel, maxItemLevel, usable. Every field is optional.
+-- @param filter table -- text, class, subclass, slots, minQuality, minLevel, maxLevel,
+--                        minItemLevel, maxItemLevel, usable, sort, sortDesc. All optional.
+--                        `slots` is a SET: { [InventoryType] = true, ... }.
 function ItemBrowserSearch:Begin(filter)
     filter = filter or EMPTY
     local text = filter.text or ""
@@ -218,18 +371,27 @@ function ItemBrowserSearch:Begin(filter)
         classPair = filter.class + (filter.subclass or 0) * 32
     end
 
+    -- An empty slot set would match nothing, which is never what "no slot chosen" means.
+    local slots = filter.slots
+    if slots and next(slots) == nil then slots = nil end
+
+    local order = ORDER[filter.sort] or ORDER.match
+
     self.job = {
         query      = query ~= "" and query or nil,
         asId       = asId,
         idRow      = nil,
         classPair  = filter.subclass and classPair or nil,
         classOnly  = (filter.class and not filter.subclass) and filter.class or nil,
+        slots      = slots,
         minQuality = filter.minQuality or 0,
         minLevel   = filter.minLevel,
         maxLevel   = filter.maxLevel,
         minIlvl    = filter.minItemLevel,
         maxIlvl    = filter.maxItemLevel,
         ctx        = filter.usable and PlayerContext() or nil,
+        sort       = order.key,
+        desc       = filter.sortDesc and true or false,
         note       = note,
 
         phase   = "index",
@@ -270,7 +432,9 @@ function ItemBrowserSearch:Step(budget)
     if not job or job.phase == "done" then return true end
 
     if job.phase == "index" then
-        if job.query then
+        -- The lowercase index is needed by a name query AND by A-Z ordering, and both want
+        -- it complete before anything else happens.
+        if job.query or job.sort == "name" then
             local used = StepIndex(budget)
             if lowerBuilt < D.rows then return false end
             budget = budget - used
@@ -303,11 +467,15 @@ function ItemBrowserSearch:Step(budget)
     if job.phase == "rank" then
         local out = job.out
         if job.query then
-            sort(out)
+            -- With a name typed, out[] holds packed relevance keys. They are only worth
+            -- sorting when relevance is the requested order; either way they have to be
+            -- reduced back to plain row indices before anything else touches them.
+            if job.sort == "match" then sort(out) end
             for i = 1, job.n do
                 out[i] = out[i] % KEY_ROW
             end
         end
+        ApplySort(job)
         job.phase = "done"
     end
     return true
@@ -319,6 +487,7 @@ function ItemBrowserSearch:Passes(job, index)
     if not m then return false end
     if job.classPair and floor(m / D_CLASS) % W_CLASSPAIR ~= job.classPair then return false end
     if job.classOnly and floor(m / D_CLASS) % 32 ~= job.classOnly then return false end
+    if job.slots and not job.slots[floor(m / D_INVTYPE) % W_INVTYPE] then return false end
     if m % W_QUALITY < job.minQuality then return false end
     local reqLevel = floor(m / D_REQLEVEL) % W_REQLEVEL
     if job.minLevel and reqLevel < job.minLevel then return false end
@@ -343,7 +512,7 @@ function ItemBrowserSearch:Scan(job, first, last)
     local qlen = query and #query or 0
     local idRow = job.idRow
     local ctx = job.ctx
-    local classPair, classOnly = job.classPair, job.classOnly
+    local classPair, classOnly, slots = job.classPair, job.classOnly, job.slots
     local minQuality = job.minQuality
     local minLevel, maxLevel = job.minLevel, job.maxLevel
     local minIlvl, maxIlvl = job.minIlvl, job.maxIlvl
@@ -356,6 +525,10 @@ function ItemBrowserSearch:Scan(job, first, last)
             ok = floor(m / D_CLASS) % W_CLASSPAIR == classPair
         elseif ok and classOnly then
             ok = floor(m / D_CLASS) % 32 == classOnly
+        end
+        if ok and slots then
+            -- One table lookup, and only for rows the category test already let through.
+            ok = slots[floor(m / D_INVTYPE) % W_INVTYPE] == true
         end
         if ok and minQuality > 0 then
             ok = m % W_QUALITY >= minQuality

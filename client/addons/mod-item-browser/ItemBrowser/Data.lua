@@ -23,8 +23,9 @@ that adds ~8 MB to the Lua heap and one that adds ~40 MB.
 
 Data/Filters.lua adds the tables the filter bar needs that are not per row: category and
 subcategory labels (read out of the client's own ItemClass.dbc / ItemSubClass.dbc, so they are
-the same words the auction house uses), the pooled class/race/skill restrictions the packed
-`restrict` field indexes, and the weapon/armour proficiency map.
+the same words the auction house uses), the inventory slots each subcategory actually contains
+(the tree's third tier), the pooled class/race/skill restrictions the packed `restrict` field
+indexes, and the weapon/armour proficiency map.
 ------------------------------------------------------------------------------------------]]
 
 ItemBrowserData = {
@@ -40,6 +41,8 @@ ItemBrowserData = {
     -- the first index of a nil table.
     category      = {},
     categoryOrder = {},
+    slotToken     = {},
+    limits        = { reqLevel = 80, itemLevel = 300 },
     restrict      = {},
     profSkill     = {},
     skillName     = {},
@@ -133,6 +136,30 @@ function ItemBrowserData:CategoryLabel(class, subclass)
         if cat.sub[i][1] == subclass then return cat.name, cat.sub[i][3] end
     end
     return cat.name, nil
+end
+
+--[[
+Inventory slot labels.
+
+The generated slotToken table maps item_template.InventoryType to the SUFFIX of a client
+global -- 13 -> "WEAPON" -> INVTYPE_WEAPON -> "One-Hand". The words are therefore the
+client's own, in the client's locale, and identical to what the character pane and the
+auction house print; nothing in this addon spells a slot name.
+
+InventoryType 0 means "not equippable" and deliberately has no entry: a Glyph has no slot,
+and inventing a label for the absence of one would put a meaningless row in the tree.
+
+Several tokens legitimately share a label (RANGED and RANGEDRIGHT are both "Ranged", CHEST
+and ROBE are both "Chest", SHIELD and WEAPONOFFHAND are both "Off Hand"), which is why the
+tree groups slots by this string and filters on the SET of ids behind it -- picking "Off
+Hand" under Armor must not silently drop half the off-hand items.
+]]
+function ItemBrowserData:SlotLabel(invType)
+    local token = self.slotToken[invType]
+    if not token then return nil end
+    -- The fallback is the token itself rather than nil: a client missing the global would
+    -- otherwise produce an unclickable blank row in the tree.
+    return _G["INVTYPE_" .. token] or token
 end
 
 --- Row index for an item id, or nil. Binary search; entry[] is ascending by construction.

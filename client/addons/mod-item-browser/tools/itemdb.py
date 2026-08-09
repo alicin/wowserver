@@ -20,7 +20,8 @@ Emits, deterministically and idempotently, into <addon>/Data/:
                     removing a shard never requires touching the hand-written .toc
     Icons.lua       the distinct Interface\\Icons\\ names, once each (4.8k, not 46k)
     Filters.lua     everything the auction-house-style filter bar needs that is NOT per row:
-                    category and subcategory LABELS, the per-category row counts, the pooled
+                    category and subcategory LABELS, the per-category row counts, the
+                    inventory slots each subcategory actually contains, the pooled
                     class/race/skill restrictions, and the weapon/armour proficiency map
     Items_NN.lua    the sharded rows
     Meta.lua        row count, shard count and a content digest -- what the addon prints in
@@ -112,6 +113,16 @@ Every one is a hard failure in both --emit and --check.
       the pinned core, and every skill id anything references resolves in SkillLine.dbc.
       The core comparison is SKIPPED -- loudly -- when no checkout is at --ac-src, because
       .work/ is gitignored and a fresh clone does not have one.
+  #14 the inventory-slot table agrees with BOTH authorities: every id matches the core's
+      `enum InventoryType`, and every token names a real INVTYPE_* string in the CLIENT's
+      Interface\\FrameXML\\GlobalStrings.lua (read straight out of the MPQ chain). The two
+      spell some slots differently -- the core says INVTYPE_SHOULDERS, the client's global is
+      INVTYPE_SHOULDER -- so the check knows the one rule that reconciles them and nothing
+      else; see check_inventory_types(). Either half is SKIPPED, loudly, when its source is
+      absent.
+  #15 every row's InventoryType has a slot entry under its (class, subclass), and those
+      per-slot counts sum to the subclass's own count. The slot tier of the category tree is
+      built from these, so a slot that went missing would silently hide items.
 """
 
 import argparse
@@ -122,6 +133,7 @@ import shlex
 import struct
 import subprocess
 import sys
+import zlib
 from xml.etree import ElementTree
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -400,6 +412,104 @@ ITEM_CLASS_WEAPON = 2
 ITEM_CLASS_ARMOR = 4
 
 
+# ==========================================================================================
+# inventory slots
+# ==========================================================================================
+#
+# item_template.InventoryType -> the SUFFIX of the FrameXML global that names the slot, so the
+# addon draws whatever INVTYPE_HEAD says in the player's own locale rather than an English
+# word baked in here. This is the third tier of the category tree, exactly as the stock
+# auction house builds it: GetAuctionInvTypes() hands Blizzard_AuctionUI.lua:678 a list of
+# global NAMES and it renders _G[name].
+#
+# There is no DBC for this. The ids are an enum in the core and the strings are constants in
+# the client, and the two do not spell every slot the same way, so neither one alone can
+# produce this table -- hence a literal here and invariant #14 to check it against both.
+INVENTORY_TYPES = {
+    1: "HEAD", 2: "NECK", 3: "SHOULDER", 4: "BODY", 5: "CHEST", 6: "WAIST", 7: "LEGS",
+    8: "FEET", 9: "WRIST", 10: "HAND", 11: "FINGER", 12: "TRINKET", 13: "WEAPON",
+    14: "SHIELD", 15: "RANGED", 16: "CLOAK", 17: "2HWEAPON", 18: "BAG", 19: "TABARD",
+    20: "ROBE", 21: "WEAPONMAINHAND", 22: "WEAPONOFFHAND", 23: "HOLDABLE", 24: "AMMO",
+    25: "THROWN", 26: "RANGEDRIGHT", 27: "QUIVER", 28: "RELIC",
+}
+
+# The ONLY difference the check tolerates between a core enum name and a client global name.
+# The core pluralises three body parts (INVTYPE_SHOULDERS / _WRISTS / _HANDS) where the
+# client's GlobalStrings.lua is singular. Encoded as an explicit list rather than as a
+# "strip a trailing S" rule so that a genuinely new slot cannot slip through by accident.
+INVTYPE_SPELLING = {"SHOULDERS": "SHOULDER", "WRISTS": "WRIST", "HANDS": "HAND"}
+
+GLOBALSTRINGS_PATH = "Interface\\FrameXML\\GlobalStrings.lua"
+
+
+def check_inventory_types(ac_src, client_data):
+    """Invariant #14. Returns notes for the log; raises on disagreement."""
+    notes = []
+
+    header = os.path.join(ac_src, "src/server/game/Entities/Item/ItemTemplate.h")
+    if os.path.isfile(header):
+        with open(header, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        match = re.search(r"enum\s+InventoryType[^{]*\{(.*?)\}\s*;", text, re.S)
+        if not match:
+            raise Fail("could not find `enum InventoryType` in the core checkout")
+        core = {}
+        for name, value in re.findall(r"\b(INVTYPE_[A-Z0-9_]+)\s*=\s*(\d+)", match.group(1)):
+            core[int(value)] = name[len("INVTYPE_"):]
+        core.pop(0, None)                      # INVTYPE_NON_EQUIP: not a slot, never labelled
+        ours = {i: INVENTORY_TYPES[i] for i in INVENTORY_TYPES}
+        translated = {i: INVTYPE_SPELLING.get(n, n) for i, n in core.items()}
+        if translated != ours:
+            differing = sorted(set(translated) | set(ours))
+            detail = ", ".join(f"{i}: core {core.get(i)!r} -> {translated.get(i)!r} "
+                               f"vs ours {ours.get(i)!r}"
+                               for i in differing if translated.get(i) != ours.get(i))
+            raise Fail(f"INVENTORY_TYPES disagrees with the core's enum InventoryType: {detail}")
+        notes.append(f"{len(ours)} inventory slots match enum InventoryType in "
+                     f"{os.path.relpath(header, ac_src)}")
+    else:
+        notes.append(None)
+
+    strings = read_client_globalstrings(client_data)
+    if strings is None:
+        notes.append(None)
+    else:
+        missing = [f"INVTYPE_{t}" for t in INVENTORY_TYPES.values()
+                   if not strings.get("INVTYPE_" + t)]
+        if missing:
+            raise Fail("the client's GlobalStrings.lua has no string for: " + ", ".join(missing))
+        distinct = len({strings["INVTYPE_" + t] for t in INVENTORY_TYPES.values()})
+        # Not an error: INVTYPE_RANGED and INVTYPE_RANGEDRIGHT are both "Ranged", CHEST and
+        # ROBE are both "Chest", SHIELD and WEAPONOFFHAND are both "Off Hand". The addon
+        # GROUPS slots by the string the client gives them, which is why it can afford to.
+        notes.append(f"all {len(INVENTORY_TYPES)} INVTYPE_* strings resolve in the client's "
+                     f"GlobalStrings.lua ({distinct} distinct labels)")
+    return notes
+
+
+def read_client_globalstrings(client_data):
+    """{GLOBAL: string} from the client's own GlobalStrings.lua, or None if unreadable.
+
+    Straight out of the MPQ chain: the file is not on disk in an installed client, and the
+    point of the check is to read what THIS client will actually evaluate.
+    """
+    if not client_data or not os.path.isdir(client_data):
+        return None
+    text = None
+    for path in mpq_chain(client_data):
+        try:
+            blob = MpqArchive(path).read(GLOBALSTRINGS_PATH)
+        except Exception:                                                    # noqa: BLE001
+            continue
+        if blob:
+            text = blob.decode("latin-1")
+            break
+    if text is None:
+        return None
+    return {m.group(1): m.group(2)
+            for m in re.finditer(r'^([A-Z0-9_]+)\s*=\s*"((?:[^"\\]|\\.)*)"', text, re.M)}
+
+
 def proficiency_map():
     """(class -> {subclass -> skill id}) for the subclasses that demand a proficiency."""
     out = {}
@@ -486,13 +596,14 @@ def render_icons(icons):
     return "".join(out)
 
 
-def render_filters(categories, order, pool, prof, skill_names, class_bits, race_bits):
+def render_filters(categories, order, pool, prof, skill_names, class_bits, race_bits, limits):
     """Everything the filter bar needs that is not per-row.
 
     categories: {class: {"name": str, "count": int,
-                         "sub": [(subclass, count, label), ...]}}
+                         "sub": [(subclass, count, label, [(invtype, count), ...]), ...]}}
     order:      class ids, ascending -- the order the dropdown lists them in
     pool:       [(allowClass, allowRace, reqSkill, reqRank), ...], 1-based in Lua
+    limits:     {"reqLevel": int, "itemLevel": int} -- the live maxima, for slider bounds
     """
     out = [BANNER,
            "-- Auction-house-style filter metadata.\n"
@@ -500,7 +611,13 @@ def render_filters(categories, order, pool, prof, skill_names, class_bits, race_
            "-- Category labels come from the CLIENT's ItemClass.dbc / ItemSubClass.dbc, which is\n"
            "-- where the stock auction house gets the strings in its own dropdowns. Only classes\n"
            "-- and subclasses that at least one item actually uses are listed, so the menus never\n"
-           "-- offer a category that cannot return a row.\n",
+           "-- offer a category that cannot return a row.\n"
+           "--\n"
+           "-- Each subcategory carries a fourth field: the inventory slots that subcategory's\n"
+           "-- items ACTUALLY occupy, as flat (InventoryType, count) pairs in ascending slot\n"
+           "-- order. That is the tree's third tier, the same one the auction house builds from\n"
+           "-- GetAuctionInvTypes(). Counted from the rows rather than assumed, so 'Bows' offers\n"
+           "-- Ranged and nothing else, and no branch can be opened onto an empty list.\n",
            "ItemBrowserData.categoryOrder = {\n"]
     out.append(wrap([str(c) for c in order], indent="  "))
     out.append("}\n\nItemBrowserData.category = {\n")
@@ -508,10 +625,35 @@ def render_filters(categories, order, pool, prof, skill_names, class_bits, race_
         info = categories[cls]
         out.append("  [%d] = { name = %s, count = %d, sub = {\n"
                    % (cls, lua_string(info["name"]), info["count"]))
-        out.append(wrap(["{%d,%d,%s}" % (sub, count, lua_string(label))
-                         for sub, count, label in info["sub"]], indent="    "))
+        out.append(wrap(["{%d,%d,%s,{%s}}"
+                         % (sub, count, lua_string(label),
+                            ",".join("%d,%d" % pair for pair in slots))
+                         for sub, count, label, slots in info["sub"]], indent="    "))
         out.append("  } },\n")
     out.append("}\n")
+
+    out.append(
+        "\n-- InventoryType -> the SUFFIX of the client global that names the slot; the addon\n"
+        "-- shows _G[\"INVTYPE_\" .. token], so the words are the client's and the locale's, not\n"
+        "-- this tool's. Ids checked against the core's enum InventoryType and every token\n"
+        "-- checked against the client's own GlobalStrings.lua (invariant #14).\n"
+        "--\n"
+        "-- Several tokens deliberately share a label: INVTYPE_RANGED and INVTYPE_RANGEDRIGHT\n"
+        "-- are both \"Ranged\", CHEST and ROBE are both \"Chest\", SHIELD and WEAPONOFFHAND are\n"
+        "-- both \"Off Hand\". The tree groups slots by the LABEL, so those collapse into one\n"
+        "-- clickable row that filters on all of the ids behind it.\n"
+        "ItemBrowserData.slotToken = {\n")
+    out.append(wrap(["[%d]=%s" % (inv, lua_string(token))
+                     for inv, token in sorted(INVENTORY_TYPES.items())], indent="  "))
+    out.append("}\n")
+
+    out.append(
+        "\n-- The live maxima, so the level sliders span exactly what the database contains\n"
+        "-- rather than a guessed 1..80. reqLevel is above 80 for a handful of internal rows.\n"
+        "ItemBrowserData.limits = {\n"
+        "  reqLevel = %d,\n"
+        "  itemLevel = %d,\n"
+        "}\n" % (limits["reqLevel"], limits["itemLevel"]))
 
     out.append(
         "\n-- Pooled (AllowableClass, AllowableRace, RequiredSkill, RequiredSkillRank), four\n"
@@ -631,7 +773,8 @@ def build(db, dbc_dir, shard_rows):
 
     icon_index, icon_list = {}, []
     pool_index, pool = {UNRESTRICTED: 0}, []
-    class_rows, subclass_rows = {}, {}
+    class_rows, subclass_rows, slot_rows = {}, {}, {}
+    limits = {"reqLevel": 0, "itemLevel": 0}
     used_skills = set()
     rows = []
     previous_entry = -1
@@ -673,6 +816,9 @@ def build(db, dbc_dir, shard_rows):
 
         class_rows[cls] = class_rows.get(cls, 0) + 1
         subclass_rows[(cls, sub)] = subclass_rows.get((cls, sub), 0) + 1
+        slot_rows[(cls, sub, inv)] = slot_rows.get((cls, sub, inv), 0) + 1
+        limits["reqLevel"] = max(limits["reqLevel"], rlvl)
+        limits["itemLevel"] = max(limits["itemLevel"], ilvl)
 
         fields = [quality, inv, cls, sub, rlvl, ilvl, restrict]
         meta = pack_meta(fields)
@@ -686,7 +832,8 @@ def build(db, dbc_dir, shard_rows):
                        f"not {tuple_}")
         rows.append((entry, name, meta, slot))
 
-    categories, order = build_categories(class_names, subclass_names, class_rows, subclass_rows)
+    categories, order = build_categories(class_names, subclass_names, class_rows, subclass_rows,
+                                         slot_rows)
     # --- invariant #13, DBC half -----------------------------------------------------
     # The proficiency skills MUST resolve: a nameless one would be a parse bug, and the addon
     # would silently stop filtering plate away from mages. A nameless RequiredSkill is a
@@ -702,7 +849,7 @@ def build(db, dbc_dir, shard_rows):
     files = {
         "Icons.lua": render_icons(icon_list),
         "Filters.lua": render_filters(categories, order, pool, prof, skill_names,
-                                      class_bits, race_bits),
+                                      class_bits, race_bits, limits),
     }
     chunks = [rows[i:i + shard_rows] for i in range(0, len(rows), shard_rows)]
     shard_names = ["Items_%02d.lua" % n for n in range(1, len(chunks) + 1)]
@@ -723,8 +870,8 @@ def build(db, dbc_dir, shard_rows):
     return files, rows, icon_list, pool
 
 
-def build_categories(class_names, subclass_names, class_rows, subclass_rows):
-    """Labels + counts for every class/subclass that at least one row uses. Invariant #11.
+def build_categories(class_names, subclass_names, class_rows, subclass_rows, slot_rows):
+    """Labels + counts for every class/subclass that at least one row uses. Invariants #11, #15.
 
     A category with no items is not emitted: offering "Permanent" in a dropdown that can only
     ever return nothing is worse than not offering it. Conversely a class/subclass pair that
@@ -748,7 +895,19 @@ def build_categories(class_names, subclass_names, class_rows, subclass_rows):
                 continue
             slabel = (clean(subclass_names.get((c, s)), f"subclass {c}/{s}")
                       or ("Subclass %d" % s))
-            sub.append((s, count, slabel))
+            # --- invariant #15 -------------------------------------------------------
+            # Ascending slot id, which is the canonical head-to-relic order the character
+            # pane uses, and the order the AH's own third tier comes out in.
+            slots = [(inv, n) for (c2, s2, inv), n in sorted(slot_rows.items())
+                     if (c2, s2) == (c, s)]
+            covered = sum(n for _, n in slots)
+            if covered != count:
+                raise Fail(f"class {c} subclass {s}: slot counts sum to {covered}, "
+                           f"but the subclass holds {count} rows")
+            for inv, _ in slots:
+                if inv != 0 and inv not in INVENTORY_TYPES:
+                    raise Fail(f"class {c} subclass {s}: InventoryType {inv} has no slot token")
+            sub.append((s, count, slabel, slots))
         categories[cls] = {"name": label, "count": class_rows[cls], "sub": sub}
     return categories, order
 
@@ -782,6 +941,16 @@ RESTRICT_SPOT_CHECKS = {
 }
 
 
+# (class, subclass) -> {InventoryType: rows}, as the live table has them. The slot tier of the
+# category tree is generated, so it needs a spot check of its own: "Bows" offering anything but
+# Ranged, or offering nothing at all, is a broken tree rather than a wrong label.
+SLOT_SPOT_CHECKS = {
+    (2, 2): {13: 1, 15: 303, 26: 4},           # Weapon / Bows -> almost entirely INVTYPE_RANGED
+    (4, 6): {14: 686},                         # Armor / Shields -> INVTYPE_SHIELD, nothing else
+    (16, 1): {0: 35},                          # Glyph / Warrior -> not equippable at all
+}
+
+
 def check_spots(rows, icon_list):
     """Invariant #6."""
     by_entry = {r[0]: r for r in rows}
@@ -804,13 +973,22 @@ def check_category_spots(rows, files, pool):
     is caught as well as a bug in build_categories.
     """
     text = files["Filters.lua"]
-    labels = {}
+    labels, slots = {}, {}
     for block in re.finditer(r"\[(\d+)\] = \{ name = \"([^\"]*)\", count = \d+, sub = \{(.*?)\n  \} \},",
                              text, re.S):
         cls = int(block.group(1))
         labels[cls] = (block.group(2), {})
-        for sub in re.finditer(r"\{(\d+),\d+,\"([^\"]*)\"\}", block.group(3)):
+        body = re.sub(r"\n\s*", "", block.group(3))
+        for sub in re.finditer(r"\{(\d+),\d+,\"([^\"]*)\",\{([\d,]*)\}\}", body):
             labels[cls][1][int(sub.group(1))] = sub.group(2)
+            numbers = [int(n) for n in sub.group(3).split(",") if n]
+            slots[(cls, int(sub.group(1)))] = dict(zip(numbers[0::2], numbers[1::2]))
+
+    for (cls, sub), want in SLOT_SPOT_CHECKS.items():
+        got = slots.get((cls, sub))
+        if got != want:
+            raise Fail(f"slot spot check: class {cls} subclass {sub} emitted {got}, "
+                       f"expected {want}")
 
     by_entry = {r[0]: r for r in rows}
     for entry, (want_class, want_sub) in CATEGORY_SPOT_CHECKS.items():
@@ -938,7 +1116,8 @@ class MpqHashTable:
 
     def __init__(self, path):
         with open(path, "rb") as fh:
-            blob = fh.read()
+            self.blob = fh.read()
+        blob = self.blob
         base = None
         for off in range(0, len(blob) - 32, 512):
             if blob[off:off + 4] == b"MPQ\x1a":
@@ -946,14 +1125,20 @@ class MpqHashTable:
                 break
         if base is None:
             raise RuntimeError(f"{path}: no MPQ header")
-        (_, _, _, _, _, hash_pos, _, hash_size, _) = struct.unpack_from("<4sIIHHIIII", blob, base)
+        (_, _, _, _, block_pow,
+         hash_pos, block_pos, hash_size, block_size) = struct.unpack_from("<4sIIHHIIII",
+                                                                         blob, base)
         raw = blob[base + hash_pos: base + hash_pos + hash_size * 16]
         self.entries = _mpq_decrypt(raw, _mpq_hash("(hash table)", 3))
         self.size = hash_size
+        self.base = base
+        self.sector_size = 512 << block_pow
+        self.blocks = _mpq_decrypt(blob[base + block_pos: base + block_pos + block_size * 16],
+                                   _mpq_hash("(block table)", 3))
 
-    def has(self, archived_name):
+    def _block_of(self, archived_name):
         if not self.size:
-            return False
+            return None
         start = _mpq_hash(archived_name, 0) % self.size
         want1 = _mpq_hash(archived_name, 1)
         want2 = _mpq_hash(archived_name, 2)
@@ -961,18 +1146,97 @@ class MpqHashTable:
             i = (start + step) % self.size
             name1, name2, _, _, block = struct.unpack_from("<IIHHI", self.entries, i * 16)
             if block == self.HASH_EMPTY:
-                return False
+                return None
             if block != self.HASH_DELETED and name1 == want1 and name2 == want2:
-                return True
-        return False
+                return block
+        return None
+
+    def has(self, archived_name):
+        return self._block_of(archived_name) is not None
 
 
-def icon_check(client_data, icons, strict):
-    archives = []
+class MpqArchive(MpqHashTable):
+    """...plus reading one out again.
+
+    Only the shapes a 3.3.5a FrameXML file is actually stored in: uncompressed, or zlib per
+    sector. Anything else (PKWARE implode, bzip2, encrypted) raises rather than guesses --
+    the caller treats a raise as 'this archive does not have it' and moves down the chain.
+    """
+
+    FLAG_EXISTS = 0x80000000
+    FLAG_SINGLE_UNIT = 0x01000000
+    FLAG_ENCRYPTED = 0x00010000
+    FLAG_COMPRESSED = 0x00000200
+    FLAG_IMPLODED = 0x00000100
+
+    def read(self, archived_name):
+        block = self._block_of(archived_name)
+        if block is None:
+            return None
+        offset, csize, fsize, flags = struct.unpack_from("<IIII", self.blocks, block * 16)
+        if not flags & self.FLAG_EXISTS:
+            return None
+        if flags & self.FLAG_ENCRYPTED or flags & self.FLAG_IMPLODED:
+            raise RuntimeError(f"{archived_name}: stored encrypted or imploded")
+        raw = self.blob[self.base + offset: self.base + offset + csize]
+
+        def inflate(chunk, want):
+            if len(chunk) >= want:            # a sector that did not compress is stored raw
+                return chunk[:want]
+            if chunk[0] != 0x02:
+                raise RuntimeError(f"{archived_name}: compression mask 0x{chunk[0]:02x}")
+            return zlib.decompress(chunk[1:])
+
+        if flags & self.FLAG_SINGLE_UNIT or fsize <= self.sector_size:
+            if flags & self.FLAG_COMPRESSED:
+                return inflate(raw, fsize)
+            return raw[:fsize]
+        sectors = (fsize + self.sector_size - 1) // self.sector_size
+        table = struct.unpack_from(f"<{sectors + 1}I", raw, 0)
+        out = bytearray()
+        for i in range(sectors):
+            chunk = raw[table[i]:table[i + 1]]
+            want = min(self.sector_size, fsize - len(out))
+            out += inflate(chunk, want) if flags & self.FLAG_COMPRESSED else chunk[:want]
+        return bytes(out[:fsize])
+
+
+def mpq_chain(client_data):
+    """Every .MPQ under a client's Data/, in the order the client resolves a path in.
+
+    Highest priority first, so the FIRST archive that has a file is the one whose copy the
+    game would use. That ordering is not cosmetic: patch-enUS.MPQ and patch-enUS-3.MPQ both
+    contain Interface\\FrameXML\\UI.xsd and GlobalStrings.lua, three patch levels apart, and
+    reading the older one would check this addon against a client that no longer exists.
+
+    The rule, from how WoW loads archives: patch archives beat base archives, locale archives
+    beat generic ones, and a higher patch number beats a lower one. A single-letter suffix
+    (patch-Z.MPQ) is a hand-made archive appended after the numbered ones.
+    """
+    found = []
     for root, _, names in os.walk(client_data):
         for name in names:
             if name.lower().endswith(".mpq"):
-                archives.append(os.path.join(root, name))
+                found.append(os.path.join(root, name))
+
+    def rank(path):
+        stem = os.path.splitext(os.path.basename(path).lower())[0]
+        parts = stem.split("-")
+        is_patch = 1 if parts[0] == "patch" else 0
+        # A four-letter alphabetic part is a locale code: "enUS", "deDE".
+        is_locale = 1 if any(len(p) == 4 and p.isalpha() for p in parts[1:]) else 0
+        suffix, last = 0, parts[-1] if len(parts) > 1 else ""
+        if last.isdigit():
+            suffix = int(last)
+        elif len(last) == 1 and last.isalpha():
+            suffix = 99
+        return (is_patch, is_locale, suffix, stem)
+
+    return sorted(found, key=rank, reverse=True)
+
+
+def icon_check(client_data, icons, strict):
+    archives = mpq_chain(client_data)
     if not archives:
         raise Fail(f"no .MPQ archives under {client_data}")
     tables = []
@@ -1055,6 +1319,10 @@ def main():
                          f"(default dir: {DEFAULT_CLIENT_DATA})")
     ap.add_argument("--strict-icons", action="store_true",
                     help="make an unresolvable icon a hard failure")
+    ap.add_argument("--client-data", default=DEFAULT_CLIENT_DATA, metavar="DIR",
+                    help="client Data/ directory whose GlobalStrings.lua the inventory-slot "
+                         f"tokens are checked against (default: {DEFAULT_CLIENT_DATA}; "
+                         "skipped if absent)")
     ap.add_argument("--ac-src", default=DEFAULT_AC_SRC, metavar="DIR",
                     help="core checkout to cross-check the proficiency table against "
                          f"(default: {DEFAULT_AC_SRC}; skipped if absent)")
@@ -1081,6 +1349,19 @@ def main():
         else:
             print(f"   !! no core checkout at {args.ac_src} -- invariant #13 (the weapon and "
                   "armour proficiency table matches ItemTemplate.h) NOT CHECKED", file=sys.stderr)
+        # --- invariant #14 -----------------------------------------------------------
+        core_note, client_note = check_inventory_types(args.ac_src, args.client_data)
+        if core_note:
+            print(f"   {core_note}")
+        else:
+            print(f"   !! no core checkout at {args.ac_src} -- invariant #14 (slot ids match "
+                  "enum InventoryType) NOT CHECKED", file=sys.stderr)
+        if client_note:
+            print(f"   {client_note}")
+        else:
+            print(f"   !! no readable client at {args.client_data} -- invariant #14 (every slot "
+                  "token names a string in the client's GlobalStrings.lua) NOT CHECKED",
+                  file=sys.stderr)
 
         files, rows, icons, pool = build(Db(args.mysql_cmd), args.dbc, args.shard_rows)
         check_spots(rows, icons)

@@ -1,8 +1,8 @@
 ## Interface: 30300
 ## Title: Item Browser
-## Notes: GM item search with icons and tooltips, and one button to hand an item to your target.
+## Notes: Browse every item on the realm with auction-house filters, real item tooltips, and one button to hand an item to your target.
 ## Author: wowserver
-## Version: 1.0
+## Version: 2.0
 ## SavedVariables: ItemBrowserSaved
 ## DefaultState: enabled
 
@@ -11,6 +11,11 @@
 #   come before Data\Data.xml.
 #   Data\Data.xml is GENERATED (tools/itemdb.py) and lists the shard files. Pointing the .toc
 #   at the XML rather than at the shards means changing --shard-rows never edits this file.
+#   UI.xml pulls in UI.lua, Tree.lua and Launcher.lua itself, in that order, before it
+#   declares any widget -- so every OnLoad handler the templates name already exists.
+#
+# Bindings.xml is deliberately NOT listed: the client loads an addon's Bindings.xml by itself,
+# and naming it here would load it twice.
 Data.lua
 Data\Data.xml
 Search.lua

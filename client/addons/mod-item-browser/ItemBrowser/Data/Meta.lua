@@ -6,5 +6,5 @@ ItemBrowserData.build = {
   rows = 46098,
   icons = 4851,
   shards = 8,
-  digest = "5e2e8b4dac96eb74",
+  digest = "c7a54f1d98e78766",
 }

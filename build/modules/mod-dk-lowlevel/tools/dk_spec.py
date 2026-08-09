@@ -200,13 +200,41 @@ POWER_AT_LEVEL_1 = 11.0 / 132.0  # = 1/12, from the live, verified Icy Touch ran
 # range, and it is what the shipped rank 1 already uses.
 MIN_DIE_SIDES = 3
 
+# A SECOND ANCHOR, for flat bonuses added to WEAPON damage.
+#
+# The 1/12 curve above is calibrated on Icy Touch, where the stock number IS the whole damage.
+# Blood Strike's +260 is not: it is a flat bonus added on top of a weapon swing, and the weapon
+# itself scales ~20x between level 1 and 55. Taking 1/12 of the level-55 bonus therefore means
+# something completely different at each end -- at 55, +260 roughly triples a ~100 hit; at level
+# 1, +22 turns a 2-5 hit into 24-27. Same fraction of the stock bonus, an order of magnitude
+# more impact. That is a methodology bug, not a tuning preference.
+#
+# Fixed the same way the spell curve was: anchor on a real peer at the same level, read from
+# Spell.dbc rather than asserted. Heroic Strike rank 1 (spell 78, BaseLevel 1) is +11, which is
+# the closest analogue any class gets at level 1. Blood Strike stock rank 1 is +260, so
+# 11/260 -- roughly half the spell ratio. Corroborated on the other two: Plague Strike lands at
+# +5 against Raptor Strike rank 1's +5, and Death Strike at +5 arriving at level 6.
+#
+# Both curves still reach 1.0 at the handoff, so the 55 transition is unchanged.
+POWER_AT_LEVEL_1_WEAPON = 11.0 / 260.0
 
-def power(level):
-    """Fraction of first-stock-rank power appropriate at `level`. power(55) == 1."""
-    return POWER_AT_LEVEL_1 + (1.0 - POWER_AT_LEVEL_1) * (level - 1) / (POWER_TOP_LEVEL - 1)
+# SpellEffects.h: the effect types whose EffectBasePoints is a FLAT addition to a weapon swing.
+# 121 SPELL_EFFECT_WEAPON_DAMAGE and 58 SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL. Derived from the
+# DBC at generate time (invariant #24) rather than trusted from this list alone.
+WEAPON_DAMAGE_EFFECTS = frozenset((58, 121))
 
 
-def scale_cell(stock_base_points, stock_die_sides, level, handoff_level):
+def power(level, weapon_flat=False):
+    """Fraction of first-stock-rank power appropriate at `level`. power(55) == 1.
+
+    `weapon_flat` selects the second anchor, for flat bonuses added to a weapon swing rather
+    than for self-contained spell damage. See POWER_AT_LEVEL_1_WEAPON.
+    """
+    at1 = POWER_AT_LEVEL_1_WEAPON if weapon_flat else POWER_AT_LEVEL_1
+    return at1 + (1.0 - at1) * (level - 1) / (POWER_TOP_LEVEL - 1)
+
+
+def scale_cell(stock_base_points, stock_die_sides, level, handoff_level, weapon_flat=False):
     """(EffectBasePoints, EffectDieSides) for a custom rank, from the stock rank-1 pair.
 
     CalcValue (SpellInfo.cpp:429-445) turns the pair into a value three different ways, so this
@@ -221,7 +249,7 @@ def scale_cell(stock_base_points, stock_die_sides, level, handoff_level):
     die = max(3, round(11/12)) = 3, average = 11, base = round(11 - 2) = 9 -> 10 to 12. That is
     the record that is live on the realm today, reproduced by formula rather than by hand.
     """
-    ratio = power(level) / power(handoff_level)
+    ratio = power(level, weapon_flat) / power(handoff_level, weapon_flat)
     if stock_die_sides == 0:
         return int(round(stock_base_points * ratio)), 0
     if stock_die_sides == 1:
@@ -243,10 +271,14 @@ class ScalingCell:
     base_points: str
     die_sides: str
     what: str                       # for the generated comment, e.g. "Frost damage"
+    # True when this cell is a FLAT addition to a weapon swing rather than self-contained
+    # damage. Selects the weapon anchor; see POWER_AT_LEVEL_1_WEAPON.
+    weapon_flat: bool = False
 
 
-def effect_cells(effect_index, what):
-    return ScalingCell(f"EffectBasePoints_{effect_index}", f"EffectDieSides_{effect_index}", what)
+def effect_cells(effect_index, what, weapon_flat=False):
+    return ScalingCell(f"EffectBasePoints_{effect_index}", f"EffectDieSides_{effect_index}", what,
+                       weapon_flat)
 
 
 @dataclass(frozen=True)
@@ -451,14 +483,14 @@ PLAGUE_STRIKE = Ability(
     intro_level=1, handoff_level=55,
     # Effect_1 is SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL: a FLAT addition on top of Effect_2's 50%
     # weapon damage. The 50% needs no scaling -- it already scales with the weapon.
-    scaling=(effect_cells(1, "bonus weapon damage"),),
+    scaling=(effect_cells(1, "bonus weapon damage", weapon_flat=True),),
 )
 
 BLOOD_STRIKE = Ability(
     key="blood_strike", name="Blood Strike", clone_from=45902, skill_line=770,
     stock_chain=(45902, 49926, 49927, 49928, 49929, 49930),
     intro_level=1, handoff_level=55,
-    scaling=(effect_cells(1, "bonus weapon damage"),),
+    scaling=(effect_cells(1, "bonus weapon damage", weapon_flat=True),),
 )
 
 DEATH_COIL = Ability(
@@ -482,7 +514,7 @@ DEATH_STRIKE = Ability(
     # five stock ranks and therefore comes across untouched by the clone. _3 is scaled anyway,
     # because the rule is "scale the cells Blizzard re-ranks" and applying it selectively is how
     # a cell gets forgotten.
-    scaling=(effect_cells(1, "bonus weapon damage"),
+    scaling=(effect_cells(1, "bonus weapon damage", weapon_flat=True),
              effect_cells(3, "Effect_3 dummy (tooltip only)")),
     scripts=("spell_dk_death_strike",),
 )
@@ -568,7 +600,7 @@ DEATH_STRIKE_OFFHAND = Ability(
     key="death_strike_offhand", name="Death Strike (off-hand)", clone_from=66188,
     skill_line=772, stock_chain=(66188, 66950, 66951, 66952, 66953),
     intro_level=DEATH_STRIKE.intro_level, handoff_level=DEATH_STRIKE.handoff_level,
-    scaling=(effect_cells(1, "bonus off-hand weapon damage"),),
+    scaling=(effect_cells(1, "bonus off-hand weapon damage", weapon_flat=True),),
     learnable=False, mirror_of="death_strike",
 )
 
@@ -576,7 +608,7 @@ BLOOD_STRIKE_OFFHAND = Ability(
     key="blood_strike_offhand", name="Blood Strike (off-hand)", clone_from=66215,
     skill_line=770, stock_chain=(66215, 66975, 66976, 66977, 66978, 66979),
     intro_level=BLOOD_STRIKE.intro_level, handoff_level=BLOOD_STRIKE.handoff_level,
-    scaling=(effect_cells(1, "bonus off-hand weapon damage"),),
+    scaling=(effect_cells(1, "bonus off-hand weapon damage", weapon_flat=True),),
     learnable=False, mirror_of="blood_strike",
 )
 

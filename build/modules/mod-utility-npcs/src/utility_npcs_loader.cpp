@@ -17,7 +17,9 @@
 
 void AddSC_utility_npcs();
 
+void AddSC_npc_talent_master();
 void Addmod_utility_npcsScripts()
 {
+    AddSC_npc_talent_master();
     AddSC_utility_npcs();
 }

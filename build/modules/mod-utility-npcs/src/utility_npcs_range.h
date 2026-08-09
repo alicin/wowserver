@@ -23,10 +23,10 @@ static constexpr uint32_t kUtilityNpcSpawnIdCeiling = 0xFFFFFFu;
 // Rows the migration inserts. The boot check warns when the live count differs -- which is the
 // normal, expected state for exactly one boot after this file changes, and a real problem if it
 // persists.
-static constexpr uint32_t kUtilityNpcSpawnCount = 734u;
+static constexpr uint32_t kUtilityNpcSpawnCount = 878u;
 
 // Every creature_template entry this module is allowed to place. Used by the boot check to tell
 // "our rows" from "somebody parked something in our block".
-static constexpr uint32_t kUtilityNpcEntries[] = { 190010, 190011, 199999, 300000, 601015, 9000000 };
+static constexpr uint32_t kUtilityNpcEntries[] = { 190010, 190011, 199999, 300000, 601015, 9000000, 9000100 };
 
 #endif // UTILITY_NPCS_RANGE_H_

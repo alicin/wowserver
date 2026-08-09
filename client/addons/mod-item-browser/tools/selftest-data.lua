@@ -340,7 +340,145 @@ for _, filter in ipairs({ {}, { class = 4, minQuality = 3 }, { text = "cloth" },
     check(same, string.format("identical over %d steps of 977 rows (%d results)", steps, na))
 end
 
-print("\n== 9. timing (LuaJIT; WoW's interpreter is several times slower)")
+print("\n== 9. the slot tier is what item_template's InventoryType says it is")
+-- Every (class, subclass, InventoryType) triple in the database must appear in the generated
+-- slot lists with the right count, and the counts under a subclass must add up to it. That is
+-- what makes the tree's third tier trustworthy: a slot that went missing here would silently
+-- hide items behind a branch that looks complete.
+local triples = {}
+for i = 1, #order do
+    local t = order[i]
+    local key = t.class .. ":" .. t.subclass .. ":" .. t.inv
+    triples[key] = (triples[key] or 0) + 1
+end
+local emittedTriples, slotProblem = 0, nil
+for c = 1, #D.categoryOrder do
+    local cls = D.categoryOrder[c]
+    local cat = D.category[cls]
+    for s = 1, #cat.sub do
+        local subEntry = cat.sub[s]
+        local slots = subEntry[4]
+        local total = 0
+        for i = 1, #slots - 1, 2 do
+            local key = cls .. ":" .. subEntry[1] .. ":" .. slots[i]
+            if triples[key] ~= slots[i + 1] then
+                slotProblem = slotProblem or (key .. " emitted " .. slots[i + 1] ..
+                                              ", database has " .. tostring(triples[key]))
+            end
+            total = total + slots[i + 1]
+            emittedTriples = emittedTriples + 1
+        end
+        if total ~= subEntry[2] then
+            slotProblem = slotProblem or string.format("class %d subclass %d: slots sum to %d, "
+                          .. "subclass holds %d", cls, subEntry[1], total, subEntry[2])
+        end
+    end
+end
+check(slotProblem == nil and emittedTriples == 247,
+      "all " .. emittedTriples .. " class/subclass/slot triples match the database"
+      .. (slotProblem and (" -- " .. slotProblem) or ""))
+
+local noToken = 0
+for i = 1, D.rows do
+    local _, inv = D:Decode(i)
+    if inv ~= 0 and not D.slotToken[inv] then noToken = noToken + 1 end
+end
+check(noToken == 0, "every equippable row's InventoryType resolves to a slot token")
+check(D.slotToken[15] == "RANGED" and D.slotToken[26] == "RANGEDRIGHT"
+      and D.slotToken[5] == "CHEST" and D.slotToken[20] == "ROBE",
+      "the tokens are the client's global names, duplicates and all")
+check(D.limits.reqLevel == 100 and D.limits.itemLevel == 435,
+      string.format("the slider bounds are the live maxima: required %d, item level %d",
+                    D.limits.reqLevel, D.limits.itemLevel))
+
+print("\n== 10. filtering by an inventory slot")
+local slotCases = {
+    { "Weapon / Bows, slot Ranged (both ranged ids)",
+      { class = 2, subclass = 2, slots = { [15] = true, [26] = true } },
+      function(t) return t.class == 2 and t.subclass == 2
+                  and (t.inv == 15 or t.inv == 26) end },
+    { "Armor / Cloth, slot Head",
+      { class = 4, subclass = 1, slots = { [1] = true } },
+      function(t) return t.class == 4 and t.subclass == 1 and t.inv == 1 end },
+    { "anything in an off hand (SHIELD and WEAPONOFFHAND)",
+      { slots = { [14] = true, [22] = true } },
+      function(t) return t.inv == 14 or t.inv == 22 end },
+    -- The sentence this whole feature exists for, both ways round.
+    { "bows, ITEM level 10-15",
+      { class = 2, subclass = 2, minItemLevel = 10, maxItemLevel = 15 },
+      function(t) return t.class == 2 and t.subclass == 2
+                  and t.ilvl >= 10 and t.ilvl <= 15 end },
+    { "bows, REQUIRED level 10-15",
+      { class = 2, subclass = 2, minLevel = 10, maxLevel = 15 },
+      function(t) return t.class == 2 and t.subclass == 2
+                  and t.rlvl >= 10 and t.rlvl <= 15 end },
+}
+for _, case in ipairs(slotCases) do
+    local _, got = S:Run(case[2])
+    local want = refCount(case[3])
+    check(got == want, string.format("%-52s %d rows", case[1], want)
+          .. (got == want and "" or ("  (got " .. got .. ")")))
+end
+-- An empty slot set is "no slot chosen", not "match nothing" -- a UI that hands one over
+-- during a rebuild must not blank the list.
+check(select(2, S:Run({ class = 2, subclass = 2, slots = {} })) == 308,
+      "an empty slot set filters nothing")
+
+print("\n== 11. every sort order is a permutation, in the right order")
+-- Timed here rather than in the timing block below because it can only happen once: the
+-- whole-catalogue A-Z rank is built on the first name sort and reused for the session.
+local tRank = os.clock()
+S:Run({ sort = "name" })
+print(string.format("  (first A-Z sort of all %d rows, which builds the reusable rank: %.0f ms)",
+                    D.rows, (os.clock() - tRank) * 1000))
+local FIELD = {
+    ilvl = function(i) return select(6, D:Decode(i)) end,
+    req = function(i) return select(5, D:Decode(i)) end,
+    quality = function(i) return (D:Decode(i)) end,
+    slot = function(i) return select(2, D:Decode(i)) end,
+    id = function(i) return D.entry[i] end,
+    name = function(i) return string.lower(D.name[i]) end,
+}
+local baseline = {}
+do
+    local res, n = S:Run({ class = 4, subclass = 4 })     -- Armor / Plate, 4,264 rows
+    for i = 1, n do baseline[res[i]] = true end
+end
+for _, order in ipairs(S.orders) do
+    for _, desc in ipairs({ false, true }) do
+        local res, n = S:Run({ class = 4, subclass = 4, sort = order.key, sortDesc = desc })
+        local seen, dupes, missing, unordered = {}, 0, 0, nil
+        local field = FIELD[order.key]
+        for i = 1, n do
+            local row = res[i]
+            if seen[row] then dupes = dupes + 1 end
+            seen[row] = true
+            if not baseline[row] then missing = missing + 1 end
+            if field and i > 1 then
+                local a, b = field(res[i - 1]), field(row)
+                if desc then
+                    if a < b then unordered = unordered or (tostring(a) .. " before " .. tostring(b)) end
+                elseif a > b then
+                    unordered = unordered or (tostring(a) .. " before " .. tostring(b))
+                end
+            end
+        end
+        local ok = (n == 4264) and dupes == 0 and missing == 0 and unordered == nil
+        check(ok, string.format("%-12s %-10s %d rows, no duplicates, correctly ordered%s",
+              order.label, desc and "descending" or "ascending", n,
+              unordered and ("  -- " .. unordered) or ""))
+    end
+end
+-- Sorting must never change WHICH items match, only their order.
+local nameSorted = select(2, S:Run({ text = "linen", sort = "name" }))
+local relevance = select(2, S:Run({ text = "linen" }))
+check(nameSorted == relevance,
+      "a name search keeps the same matches whichever order it is shown in: " .. relevance)
+local res12 = S:Run({ text = "linen", sort = "name" })
+check(D.name[res12[1]] < D.name[res12[2]],
+      "and A-Z really is A-Z: " .. D.name[res12[1]] .. " before " .. D.name[res12[2]])
+
+print("\n== 12. timing (LuaJIT; WoW's interpreter is several times slower)")
 local function time(filter, label)
     S:Run(filter)                                   -- warm the lowercase index
     local t = os.clock()
@@ -354,6 +492,14 @@ time({ text = "cloth" }, "name search")
 time({ text = "er" }, "name search matching a lot (\"er\")")
 time({ text = "of" }, "name search past the 5000 cap (\"of\")")
 time({ usable = true }, "usable only")
+-- The sorts, which are the only new per-search cost. The worst case is deliberately the one
+-- measured: every row matching AND a sort over all of them.
+time({ sort = "ilvl", sortDesc = true }, "full table sorted by item level")
+time({ sort = "quality", sortDesc = true }, "full table sorted by quality")
+time({ sort = "name" }, "full table sorted A-Z (rank already built, see 11)")
+time({ class = 4, subclass = 4, sort = "ilvl", sortDesc = true }, "one subcategory by ilvl")
+time({ class = 2, subclass = 2, slots = { [15] = true, [26] = true },
+       minItemLevel = 10, maxItemLevel = 15 }, "bows, ranged slot, item level 10-15")
 
 
 print(string.format("\n%d passed, %d failed", pass, fail))

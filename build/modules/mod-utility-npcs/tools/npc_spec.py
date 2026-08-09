@@ -74,6 +74,11 @@ NPCS = {
     601015: ("Beauregard Boneglitter", "enchanting service", "mod-npc-enchanter"),
     9000000: ("Gabriella", "heirlooms, glyphs, gems, enchants, bags, professions, "
                            "flight paths, lockouts", "mod-assistant"),
+    # The only entry this repo owns. Defined in
+    # data/sql/db-world/base/2026_08_08_21_utility_npcs_talent_master.sql rather than by a
+    # third-party module, which is why it is safe for us to attach a script to it.
+    9000100: ("Ysolde Ashgrave", "free talent and pet-talent respec, catch-up spell training",
+              "mod-utility-npcs"),
 }
 
 # WHY THE INN AND START ROSTERS ARE FIVE AND NOT SIX.
@@ -87,9 +92,9 @@ NPCS = {
 # So the duplicate is not dropped, it is POSTED SOMEWHERE INTERESTING: the alternate entry gets
 # the fourteen surprise locations, which is where a second transmogrifier reads as a joke instead
 # of as a bug. Change these three tuples and re-run; nothing else in the generator cares.
-ROSTER_INN = (190010, 199999, 300000, 601015, 9000000)
-ROSTER_START = (190010, 199999, 300000, 601015, 9000000)
-ROSTER_SURPRISE = (190010, 190011, 199999, 300000, 601015, 9000000)
+ROSTER_INN = (190010, 199999, 300000, 601015, 9000000, 9000100)
+ROSTER_START = (190010, 199999, 300000, 601015, 9000000, 9000100)
+ROSTER_SURPRISE = (190010, 190011, 199999, 300000, 601015, 9000000, 9000100)
 
 
 # ==============================================================================================
@@ -110,7 +115,11 @@ ROSTER_SURPRISE = (190010, 190011, 199999, 300000, 601015, 9000000)
 # Adjacent spacing is 2*R*sin(30 deg) = R. At R = 2.5 that is 2.5 yards between neighbours, and
 # the widest bounding radius among the six models is 0.4213 (Kaylub, display 31833, from
 # creature_model_info) -- so ~1.6 yards of clear air between any two of them.
-ANGLE_OFFSETS_DEG = (30.0, -30.0, 90.0, -90.0, 150.0, -150.0)
+# Seven slots, not six: the roster grew when the talent master was added. Still nothing at 0
+# (the lane a player walks up to talk to the innkeeper) and nothing at exactly 180 (behind an
+# innkeeper is the bar, the hearth or the wall). The extra pair sits at +/-125 so adjacent
+# spacing stays roughly even rather than bunching two NPCs together.
+ANGLE_OFFSETS_DEG = (30.0, -30.0, 70.0, -70.0, 110.0, -110.0, 150.0)
 
 RING_RADIUS_INN = 2.5        # cramped indoor rooms
 RING_RADIUS_START = 4.0      # open ground, and a starting zone should feel like a plaza
