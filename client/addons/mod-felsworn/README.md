@@ -1,4 +1,4 @@
-# The DemonHunter client addon
+# The Felsworn client addon
 
 Double jump and glide, plus the three FrameXML tables an eleventh class breaks.
 
@@ -25,8 +25,8 @@ verified it says so.
 
 ```
 .work/dh-parts/addon/
-  DemonHunter/                <- the AddOns folder, installed verbatim as AddOns/DemonHunter
-    DemonHunter.toc
+  Felsworn/                <- the AddOns folder, installed verbatim as AddOns/Felsworn
+    Felsworn.toc
     Core.lua                  namespace, saved variable, event frame, class gate, /dh
     ClassUI.lua               CLASS_ICON_TCOORDS / RAID_CLASS_COLORS / LOCALIZED_CLASS_NAMES
     Movement.lua              the secure buttons, the bindings, the airborne poll
@@ -40,13 +40,13 @@ Declared in `client/addons.txt` exactly the way ItemBrowser is (that file's head
 
 ```
 # repo                                         ref      mode              sha
-client/addons/mod-demon-hunter/DemonHunter     -        local:DemonHunter -
+client/addons/mod-demon-hunter/Felsworn     -        local:Felsworn -
 ```
 
-`local:DemonHunter` and not `local:demonhunter`: the folder name is what the client uses for
+`local:Felsworn` and not `local:demonhunter`: the folder name is what the client uses for
 `Interface\AddOns\<name>\Bindings.xml`, and the `.toc` basename must match the folder.
 
-When it is integrated, `DemonHunter/` moves to `client/addons/mod-demon-hunter/DemonHunter/`
+When it is integrated, `Felsworn/` moves to `client/addons/mod-demon-hunter/Felsworn/`
 and `tools/` beside it, mirroring `client/addons/mod-item-browser/`; the `addons.txt` line above
 already points there.
 
@@ -244,10 +244,10 @@ debug at 3 a.m. It is not used. It was not skipped for effort.
 Two ways to double jump, deliberately different in character:
 
 **A dedicated "Double Jump" keybind — always works, in combat and out.** `Bindings.xml`
-declares `DEMONHUNTER_DOUBLE_JUMP`; the player binds whatever key they like under
-Key Bindings → Demon Hunter. On `PLAYER_LOGIN` and on every `UPDATE_BINDINGS`, out of combat,
+declares `FELSWORN_DOUBLE_JUMP`; the player binds whatever key they like under
+Key Bindings → Felsworn. On `PLAYER_LOGIN` and on every `UPDATE_BINDINGS`, out of combat,
 the addon mirrors that key onto the secure button with `SetOverrideBindingClick(permOwner,
-true, key, "DemonHunterDoubleJumpButton", "LeftButton")`. It is installed once and never
+true, key, "FelswornDoubleJumpButton", "LeftButton")`. It is installed once and never
 changes, so lockdown never touches it. This is the reliable path, and it is the one to tell
 players about.
 
@@ -259,7 +259,7 @@ way rather than by being in the way and doing nothing. `/dh jumpkey off` disable
 permanently (the one saved variable; see `Core.lua`'s header for why it is saved and not
 per-session).
 
-Two separate owner frames, `DemonHunterBindingOwner` and `DemonHunterJumpOverlayOwner`, because
+Two separate owner frames, `FelswornBindingOwner` and `FelswornJumpOverlayOwner`, because
 `ClearOverrideBindings` takes an owner and clears *everything* that owner installed. On one
 owner, every landing would also wipe the player's Double Jump and Glide keys.
 
@@ -330,11 +330,11 @@ during the §2.6 window.
 
 ## 4. Class UI fix-ups, and why they are not class-gated
 
-`ClassUI.lua` fills in `RAID_CLASS_COLORS.DEMONHUNTER`, `CLASS_ICON_TCOORDS.DEMONHUNTER` and
-`LOCALIZED_CLASS_NAMES_{MALE,FEMALE}.DEMONHUNTER`, each only if absent.
+`ClassUI.lua` fills in `RAID_CLASS_COLORS.FELSWORN`, `CLASS_ICON_TCOORDS.FELSWORN` and
+`LOCALIZED_CLASS_NAMES_{MALE,FEMALE}.FELSWORN`, each only if absent.
 
-**It runs for every character, not just Demon Hunters.** The player who gets the nil-index
-error is not the Demon Hunter — it is the priest who invites one, because party and raid frames
+**It runs for every character, not just Felsworns.** The player who gets the nil-index
+error is not the Felsworn — it is the priest who invites one, because party and raid frames
 key on the class token of the *unit*. A class gate here would protect precisely the one person
 who never needed protecting. Part D of the brief (be inert for non-Demon-Hunters) is
 implemented against `Movement.lua`, which is where the cost is: `Core.lua` calls
@@ -351,9 +351,9 @@ ever created.
   `Constants.lua:91-102`. Row 3 there is `PALADIN {0, 0.25, 0.5, 0.75}` then
   `DEATHKNIGHT {0.25, .5, 0.5, .75}`; this is the cell immediately after them, untrimmed like
   both neighbours (rows 1 and 2 use trimmed edges such as `0.49609375` = 127/256; row 3 does
-  not). **Whoever ships the class-icon atlas must put the Demon Hunter icon in that cell.**
+  not). **Whoever ships the class-icon atlas must put the Felsworn icon in that cell.**
   One decision, expressed in two places.
-* Names "Demon Hunter", male and female. On a client whose `ChrClasses.dbc` carries the class
+* Names "Felsworn", male and female. On a client whose `ChrClasses.dbc` carries the class
   10 record these are already correct — `Constants.lua:87-88` calls `FillLocalizedClassList`,
   which reads the DBC — so this branch is the missing-archive case again.
 
@@ -364,7 +364,7 @@ for the rest of the session — strictly worse than the missing entry. That pair
 `Constants.lua`'s job, and `client/tools/patch-wow-exe.py` (docstring, lines 60-65) says so as
 the reason both signature checks are patched rather than only GlueXML's.
 
-**The token must be spelled `DEMONHUNTER`.** `select(2, UnitClass(unit))` returns
+**The token must be spelled `FELSWORN`.** `select(2, UnitClass(unit))` returns
 `ChrClasses.dbc` column `Filename`. Read off the stock server file
 `/srv/wow/data/dbc/ChrClasses.dbc` — 10 records, IDs 1–9 and 11, ID 10 absent:
 
@@ -376,9 +376,9 @@ ID  DisplayPower  Name_Lang_enUS   Filename
 11       0        Druid            DRUID
 ```
 
-(Rogue's `DisplayPower` 3 is ENERGY, which is the value the Demon Hunter row takes per the
+(Rogue's `DisplayPower` 3 is ENERGY, which is the value the Felsworn row takes per the
 project decisions.) If the generator writes any other `Filename`, this addon goes inert on a
-real Demon Hunter and nothing says why — so `/dh status` prints the token it actually saw.
+real Felsworn and nothing says why — so `/dh status` prints the token it actually saw.
 
 ---
 
@@ -386,7 +386,7 @@ real Demon Hunter and nothing says why — so `/dh status` prints the token it a
 
 Four things, none of which the client can supply:
 
-1. **`ChrClasses.dbc` class 10 with `Filename = "DEMONHUNTER"`.** §4.
+1. **`ChrClasses.dbc` class 10 with `Filename = "FELSWORN"`.** §4.
 2. **Real spell ids for `DH_SPELL_DOUBLE_JUMP` and `DH_SPELL_GLIDE`,** written into the two
    marked lines at the top of `Movement.lua`, present in *both* the client's `Spell.dbc` and
    `acore_world.spell_dbc` — the same two-halves-one-generator rule as
@@ -410,12 +410,12 @@ cd .work/dh-parts/addon
 luajit tools/selftest.lua        # 29 checks, prints "selftest: PASS"
 ```
 
-In game, on a Demon Hunter, once the ids are real:
+In game, on a Felsworn, once the ids are real:
 
 1. `/dh status` — both abilities show a resolved spell name, not
    `(NOT IN THIS CLIENT'S Spell.dbc)`. If they do not, the client patch is missing; nothing
    below will work.
-2. Bind a key to **Double Jump** under Key Bindings → Demon Hunter. `/dh status` shows it.
+2. Bind a key to **Double Jump** under Key Bindings → Felsworn. `/dh status` shows it.
 3. On flat ground, press the jump key. You jump normally — `/dh status` mid-air would show
    `overlay: ACTIVE`, on the ground `idle`.
 4. Jump, then press the jump key again in mid-air. **Second jump.** This is the acceptance
@@ -427,9 +427,9 @@ In game, on a Demon Hunter, once the ids are real:
 7. `/dh jumpkey off`, jump twice: only the first works, the dedicated key still does. Relog:
    still off.
 8. Fall off something and press Glide. Feather-fall plus forward momentum, per the server half.
-9. Log in a priest, invite the Demon Hunter to a party. No Lua errors, class-coloured row,
+9. Log in a priest, invite the Felsworn to a party. No Lua errors, class-coloured row,
    correct icon. This is §4's whole reason for existing.
-10. `/reload` while in combat on the Demon Hunter. No "action blocked" popup. When the fight
+10. `/reload` while in combat on the Felsworn. No "action blocked" popup. When the fight
     ends, both keys work again with no further action.
 
 ---
@@ -440,7 +440,7 @@ In game, on a Demon Hunter, once the ids are real:
 |---|---|---|
 | Combat that starts while airborne leaves the jump key pointed at Double Jump until it ends | no client-side way to change a binding under lockdown, and no way to tell a secure snippet the player is airborne | §2.4, §2.6 |
 | A grounded cast of either spell is not suppressed by the client | same | §3, §5.4 |
-| A key bound during combat does not take effect until combat ends | `SetOverrideBindingClick` is `#nocombat`; the binding body says so instead of doing nothing | `Bindings.xml`, `DemonHunterMovement_BindingPressed` |
+| A key bound during combat does not take effect until combat ends | `SetOverrideBindingClick` is `#nocombat`; the binding body says so instead of doing nothing | `Bindings.xml`, `FelswornMovement_BindingPressed` |
 | Holding the jump key in mid-air sends repeated casts | deliberate: the server's cooldown is the authority, and a client-side latch would be a second source of truth to get out of sync | `Movement.lua` |
 | The two keybinds appear in the Key Bindings panel for every class | the client loads an addon's `Bindings.xml` regardless of who is logged in; hiding the labels would replace two readable rows with two raw binding names | `Core.lua`, bottom |
 | The class colour is not sourced from a file | the class does not exist in 3.3.5a; there is nothing to read | §4 |

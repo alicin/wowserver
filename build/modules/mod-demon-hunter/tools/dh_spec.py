@@ -917,6 +917,7 @@ class Ability:
 # to decide whether an ability owns a 20-id block or a single id.
 from fs_abilities import (                                          # noqa: E402
     ABILITIES,
+    CELL_OVERRIDES,
     ABILITY_BLOCK_ORDER,
     ABILITY_BLOCKS,
     SECOND_SOURCES,

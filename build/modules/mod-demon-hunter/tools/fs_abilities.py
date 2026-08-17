@@ -180,6 +180,52 @@ SECOND_SOURCES = {
 }
 
 
+# =============================================================================================
+# CELLS THE TRANSPLANT GETS WRONG, AND WHAT THEY BECOME
+# =============================================================================================
+#
+# An imported record is the ability, but it is the ability AS ANOTHER ENGINE IMPLEMENTS IT.
+# Where Ascension extended the effect or aura enum, the cell that arrives is not a wrong number
+# -- it is a number this core cannot represent at all. SpellMgr::LoadSpellInfoStore ASSERTs on
+# an effect above 164 or an aura above 316, so each of these is the difference between a realm
+# that boots and one that does not.
+#
+# Applied AFTER the transplant and after dh_donors.ALWAYS, so they are the last word. Every
+# entry names the semantic it is preserving, because a remap that merely makes the assert go
+# away is worse than no remap: it ships a spell whose tooltip and behaviour disagree.
+CELL_OVERRIDES = {
+    # Aura 330 is Ascension's "chance to be critically struck by school X from the caster".
+    # 179 SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE is an exact semantic match and takes the
+    # school mask in EffectMiscValue, which the imported cell already holds -- so only the aura
+    # id moves. Stock precedent: 12579 Winter's Chill is aura 179 with EffectMiscValue 126.
+    "bane_of_fire":  {"EffectAura_2": 179},
+    "bane_of_power": {"EffectAura_1": 179},
+
+    # Aura 338 reduces the target's armour. 142 SPELL_AURA_MOD_BASE_RESISTANCE_PCT with
+    # EffectMiscValue 1 (armour) and a negative amount is the closest this core has.
+    #
+    # KNOWN DEVIATION, and it is a real one rather than a rounding difference: 142 reduces the
+    # target's armour against EVERYONE, where Ascension's 338 reduced it only against the
+    # Felsworn. In a group this is a buff to the whole group. Accepted because the alternative
+    # is a script on every damage event against the target; revisit if it matters in PvP.
+    "bane_of_frailty": {"EffectAura_1": 142, "EffectMiscValue_1": 1},
+
+    # Illidan's Guile is two problems. Effect 183 does not exist here at all and is dropped
+    # outright -- its record is a private Ascension effect, and guessing at what it did would be
+    # inventing an ability rather than porting one.
+    #
+    # Its e0 is aura 106 HOVER, which is not what the tooltip describes ("immune, but unable to
+    # act"). The shape that IS that is Ice Block 45438: aura 39 SCHOOL_IMMUNITY plus a self
+    # stun, NOT Divine Shield. e1 already carries the immunity, so e0 becomes aura 12
+    # SPELL_AURA_MOD_STUN and the pair reads correctly.
+    "illidans_guile": {
+        "Effect_3": 0, "EffectAura_3": 0, "EffectBasePoints_3": 0,
+        "EffectTriggerSpell_3": 0, "ImplicitTargetA_3": 0,
+        "EffectAura_1": 12,
+    },
+}
+
+
 # One row each inside the `singles` block, in this order. APPEND-ONLY: reordering silently
 # repoints every `character_spell` row a live Felsworn already has.
 SINGLES_ORDER = (

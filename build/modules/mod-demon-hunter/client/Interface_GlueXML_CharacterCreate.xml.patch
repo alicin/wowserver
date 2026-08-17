@@ -20,7 +20,7 @@
  									<Anchor point="TOP" relativeTo="CharacterCreateClassButton5" relativePoint="BOTTOM" x="0" y="-6"/>
  								</Anchors>
  							</CheckButton>
-+							<!-- Class 10 (Demon Hunter) makes ChrClasses.dbc eleven records, and
++							<!-- Class 10 (Felsworn) makes ChrClasses.dbc eleven records, and
 +                                 CharacterCreate.lua walks buttons 1..MAX_CLASSES_PER_RACE unconditionally,
 +                                 so an eleventh frame has to exist or CharacterCreate_OnShow indexes nil.
 +                                 Continues row 2 at the row-1 pitch (LEFT of the previous button + 6). A third

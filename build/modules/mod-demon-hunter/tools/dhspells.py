@@ -803,6 +803,9 @@ class Plan:
 
                 cells.update(dh_donors.ALWAYS)
                 cells.update(dh_donors.OVERRIDES.get(ability.key, {}))
+                # Last word, and deliberately after ALWAYS: these repair cells that this core
+                # cannot represent, and a house rule must not be able to reinstate one.
+                cells.update(getattr(spec, "CELL_OVERRIDES", {}).get(ability.key, {}))
                 # Identity last. `family` is None for everything but Vengeful Retreat, where
                 # SpellEffects.cpp:5067 makes family 9 the only way the leap goes backwards.
                 cells.update({
@@ -966,16 +969,40 @@ class Plan:
             #
             # The name matters for one reason: it is what the combat log prints. "Immolation"
             # in a Demon Hunter's log is the warlock spell it was cloned from.
-            parent_key = dh_donors.SECOND_RECORDS.get(key)
-            parent = spec.ABILITIES_BY_KEY.get(parent_key)
+            # WHO THE PARENT IS, derived from the abilities that actually name this record
+            # rather than read out of a second hand-maintained table. dh_donors.SECOND_RECORDS
+            # is the fallback for the hand-built kit, where a second record could exist without
+            # any ability listing it.
+            #
+            # A record can have SEVERAL parents -- the Felfury stack aura is triggered by every
+            # generator in the kit -- so the earliest-learned one wins. That is the one whose
+            # level the per-level ramp has to start at: pick a later parent and the record pays
+            # its flat number, with no ramp, for every level in between.
+            parents = sorted(
+                (a for a in spec.ABILITIES if key in a.triggered_halves()),
+                key=lambda a: a.level)
+            parent = parents[0] if parents else spec.ABILITIES_BY_KEY.get(
+                dh_donors.SECOND_RECORDS.get(key))
+            parent_key = parent.key if parent else dh_donors.SECOND_RECORDS.get(key)
             checks.expect(parent is not None, "#35",
                           f"second record {key!r} names parent {parent_key!r}, which is an "
                           f"ability in dh_spec")
             cells.update({"ID": sid, "NameSubtext_Lang_enUS": "",
                           "SpellClassSet": spec.CHRCLASS_ROW["SpellClassSet"]})
             if parent is not None:
-                cells.update({"Name_Lang_enUS": parent.name,
-                              "BaseLevel": parent.level, "SpellLevel": parent.level})
+                # BaseLevel is the ramp, not decoration: CalcValue (SpellInfo.cpp:409-427)
+                # clamps to BaseLevel and then subtracts it, so a tick left at a level-60
+                # donor's BaseLevel pays the level-60 flat number to a level-10 character and
+                # ramps not at all. Always taken from the parent.
+                cells.update({"BaseLevel": parent.level, "SpellLevel": parent.level})
+                # The NAME is only borrowed when there is nothing better. A cloned donor
+                # carries the DONOR's name -- "Immolation" in the combat log for a spell that
+                # is not Immolation -- which is why the Demon Hunter took the parent's. A
+                # TRANSPLANTED record already carries its own correct name, and overwriting it
+                # with the parent's would relabel "Twin Slice Off-Hand" as "Twin Slice" and
+                # make the two halves indistinguishable in the log.
+                if src_id is None:
+                    cells["Name_Lang_enUS"] = parent.name
             for col, val in cells.items():
                 if col not in t.index_of:
                     checks.expect(False, "#28", f"{key}: {col!r} is not a Spell.dbc column")
@@ -1626,11 +1653,14 @@ DELETE FROM `skilllineability_dbc` WHERE `ID` IN ({", ".join(str(s) for s, _sp, 
     chains = getattr(plan, "rank_chains", [])
     if chains:
         rank_rows = []
-        for _key, ids in chains:
-            first = ids[0]
-            for n, sid in enumerate(ids, start=1):
+        # `rank_ids`, NOT `ids`. This loop used to bind `ids` and shadowed the record-id list
+        # built at the top of the function, so check #36 compared the DBC against the last
+        # ladder's five ranks and reported 5 rows where 95 had been written.
+        for _key, rank_ids in chains:
+            first = rank_ids[0]
+            for n, sid in enumerate(rank_ids, start=1):
                 rank_rows.append([first, sid, n])
-        firsts = ", ".join(str(ids[0]) for _k, ids in chains)
+        firsts = ", ".join(str(c[1][0]) for c in chains)
         out.append(f"""
 -- spell_ranks: {len(chains)} ladder(s), {len(rank_rows)} rank(s).
 --
@@ -1982,8 +2012,8 @@ def sync_addon_spell_ids(checks):
     Rewriting rather than reading a generated Lua file: the addon must work when it is copied
     into a client on its own, with no generated companion file next to it.
     """
-    path = os.path.join(spec.REPO_ROOT, "client", "addons", "mod-demon-hunter",
-                        "DemonHunter", "Movement.lua")
+    path = os.path.join(spec.REPO_ROOT, "client", "addons", "mod-felsworn",
+                        "Felsworn", "Felfury.lua")
     if not checks.expect(os.path.exists(path), "#51",
                          f"the addon is where the generator expects it "
                          f"({os.path.relpath(path, spec.REPO_ROOT)})"):
@@ -2016,18 +2046,17 @@ def sync_addon_spell_ids(checks):
             checks.skip("#52", f"the addon does not declare {name}; nothing to sync")
             continue
         out = pat.sub(rf"\g<1>{sid}"
-                      + "      -- GENERATED from dh_spec.SINGLES_ORDER; do not edit", out, count=1)
+                      + "  -- GENERATED from dh_spec.ABILITY_BLOCKS; do not edit", out, count=1)
     if out != text:
         with open(path, "w", encoding="utf-8") as f:
             f.write(out)
-        print(f"   Movement.lua: DH_SPELL_DOUBLE_JUMP={want['DH_SPELL_DOUBLE_JUMP']} "
-              f"DH_SPELL_GLIDE={want['DH_SPELL_GLIDE']}")
+        print("   Felfury.lua: " + ", ".join(f"{n}={v}" for n, v in sorted(want.items())))
     # Belt and braces: read it back and confirm both numbers are the ones the spec says, so a
     # regex that silently matched nothing cannot pass.
     back = open(path, encoding="utf-8").read()
     for name, sid in want.items():
-        checks.expect(re.search(rf"^local {name}\s*=\s*{sid}\b", back, re.M) is not None, "#53",
-                      f"Movement.lua now has {name} = {sid}")
+        checks.expect(re.search(rf"^local {name}\s*=\s*{sid}\b", back, re.M) is not None, "#69",
+                      f"Felfury.lua declares {name} = {sid}")
 
 
 def sha256_file(path):

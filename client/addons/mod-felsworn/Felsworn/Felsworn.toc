@@ -1,0 +1,23 @@
+## Interface: 30300
+## Title: Felsworn
+## Notes: Felfury and Inner Demon tracking for the Felsworn class, plus defensive class-UI constants so party and raid frames survive a Felsworn in the group.
+## Author: wowserver
+## Version: 1.0
+## SavedVariables: FelswornSaved
+## DefaultState: enabled
+
+# Load order matters.
+#   Core.lua declares the Felsworn table, Say(), the saved-variable defaults and the event
+#   frame, so it has to come first -- everything below stores itself into that table.
+#   ClassUI.lua runs its whole job at load time and is deliberately NOT class-gated: the
+#   character who crashes on a missing CLASS_ICON_TCOORDS.FELSWORN is the priest standing
+#   next to the Felsworn, not the Felsworn. See the header of that file.
+#   Felfury.lua is class-gated and does nothing until Core calls it at PLAYER_LOGIN.
+#
+# There is no Bindings.xml. The Demon Hunter that previously occupied this class slot bound two
+# keys for double jump and glide; Felsworn has no movement abilities at all, so the file was
+# removed rather than left empty -- an empty Bindings.xml still creates a header in the Key
+# Bindings panel with nothing under it.
+Core.lua
+ClassUI.lua
+Felfury.lua

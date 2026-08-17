@@ -4,7 +4,7 @@
  CHARACTER_FACING_INCREMENT = 2;
  MAX_RACES = 10;
 -MAX_CLASSES_PER_RACE = 10;
-+MAX_CLASSES_PER_RACE = 11;	-- 11 ChrClasses.dbc records: +DEMONHUNTER (class 10)
++MAX_CLASSES_PER_RACE = 11;	-- 11 ChrClasses.dbc records: +FELSWORN (class 10)
  NUM_CHAR_CUSTOMIZATIONS = 5;
  MIN_CHAR_NAME_LENGTH = 2;
  CHARACTER_CREATE_ROTATION_START_X = nil;
@@ -12,7 +12,7 @@
  	["WARLOCK"]	= {0.7421875, 0.98828125, 0.25, 0.5},
  	["PALADIN"]	= {0, 0.25, 0.5, 0.75},
  	["DEATHKNIGHT"]	= {0.25, 0.49609375, 0.5, 0.75},
-+	["DEMONHUNTER"]	= {0.49609375, 0.7421875, 0.5, 0.75},	-- atlas row 2, col 2 (px 127-190 x 128-192)
++	["FELSWORN"]	= {0.49609375, 0.7421875, 0.5, 0.75},	-- atlas row 2, col 2 (px 127-190 x 128-192)
  };
  
 +-- Strings GlueStrings.lua has for the ten stock classes and cannot have for this one.
@@ -22,20 +22,20 @@
 +-- CharacterCreate.xml much later, so a real GlueStrings entry still wins if one ever ships.
 +--
 +-- Only the male form is defined: GetFlavorText() (below) falls back to the other suffix
-+-- when its first lookup is nil, so CLASS_DEMONHUNTER covers both sexes the way
++-- when its first lookup is nil, so CLASS_FELSWORN covers both sexes the way
 +-- CLASS_DEATHKNIGHT and CLASS_DEATHKNIGHT_FEMALE would if they were not identical.
-+if ( not CLASS_DEMONHUNTER ) then
-+	CLASS_DEMONHUNTER = "Demon hunters give up their sight, and a good deal of their sanity, for the power of the demons they hunt. They fight in leather with a weapon in each hand, spend Fury instead of mana, and can take on demonic form to run down anything that tries to get away.|n|nDemon hunters are an Agility class that deals damage or tanks. Only night elves and blood elves take up the practice.";
++if ( not CLASS_FELSWORN ) then
++	CLASS_FELSWORN = "Demon hunters give up their sight, and a good deal of their sanity, for the power of the demons they hunt. They fight in leather with a weapon in each hand, spend Fury instead of mana, and can take on demonic form to run down anything that tries to get away.|n|nDemon hunters are an Agility class that deals damage or tanks. Only night elves and blood elves take up the practice.";
 +end
-+if ( not CLASS_INFO_DEMONHUNTER0 ) then
-+	CLASS_INFO_DEMONHUNTER0 = "- Role: Damage, Tank";
-+	CLASS_INFO_DEMONHUNTER1 = "- Medium Armor (Leather)";
-+	CLASS_INFO_DEMONHUNTER2 = "- Wields a weapon in each hand.";
-+	CLASS_INFO_DEMONHUNTER3 = "- Takes demonic form to close on fleeing enemies.";
-+	CLASS_INFO_DEMONHUNTER4 = "- Uses Fury as a resource.";
++if ( not CLASS_INFO_FELSWORN0 ) then
++	CLASS_INFO_FELSWORN0 = "- Role: Damage, Tank";
++	CLASS_INFO_FELSWORN1 = "- Medium Armor (Leather)";
++	CLASS_INFO_FELSWORN2 = "- Wields a weapon in each hand.";
++	CLASS_INFO_FELSWORN3 = "- Takes demonic form to close on fleeing enemies.";
++	CLASS_INFO_FELSWORN4 = "- Uses Fury as a resource.";
 +end
-+if ( not DEMONHUNTER_DISABLED ) then
-+	DEMONHUNTER_DISABLED = "Demon Hunter\nYou must choose a different race to be this class.";
++if ( not FELSWORN_DISABLED ) then
++	FELSWORN_DISABLED = "Felsworn\nYou must choose a different race to be this class.";
 +end
 +
  function CharacterCreate_OnLoad(self)

@@ -60,7 +60,7 @@ client/addons/mod-item-browser/ItemBrowser    -        local:ItemBrowser -
 #                 file is why a friend without the patch MPQ still gets working party frames.
 #
 # Shipped to everyone, not just to Demon Hunters, for that second reason.
-client/addons/mod-demon-hunter/DemonHunter     -        local:DemonHunter -
+client/addons/mod-felsworn/Felsworn               -        local:Felsworn    -
 # AzerothAdmin must be root: -- its .toc is at the repo root, and mode=dirs would find no addon
 # there while happily installing Libraries/ as a top-level AddOn (Libraries/Ace3.toc satisfies the
 # installer's .toc test). The folder name is load-bearing: 4 hardcoded Interface\AddOns\AzerothAdmin
