@@ -44,7 +44,12 @@ say "apply our extras"
 # is just an overlay. READMEs are excluded: they are for the friend who downloads the small
 # artefact on its own, and would otherwise litter the client root.
 shopt -s nullglob
-for z in "$DIST"/addons-*.zip "$DIST"/gm-addons-*.zip "$DIST"/dk-patch-*.zip "$DIST"/realmlist-*.zip; do
+# exe-patch-*.zip carries Wow.exe and is NOT optional since the Demon Hunter shipped: an
+# eleventh ChrClasses record on a stock binary leaves the character-creation screen with no
+# class buttons at all, for every race. A client assembled without it is a client nobody can
+# make a character on. It is listed LAST so that if two exe artefacts are ever present the
+# newest wins the same way the others do. docs/demon-hunters.md 2.
+for z in "$DIST"/addons-*.zip "$DIST"/gm-addons-*.zip "$DIST"/dk-patch-*.zip "$DIST"/realmlist-*.zip "$DIST"/exe-patch-*.zip; do
     echo "   + $(basename "$z")"
     unzip -q -o "$z" -d "$CLIENT" -x 'README*' '*/README*'
 done
@@ -62,6 +67,13 @@ printf 'SET realmList "%s"\nSET checkAddonVersion "0"\nSET gxApi "d3d9"\n' "$REA
 say "sanity"
 echo "   realmlist : $(cat "$CLIENT/Data/enUS/realmlist.wtf")"
 echo "   patch-Z   : $([[ -f "$CLIENT/Data/patch-Z.MPQ" ]] && echo present || echo MISSING)"
+# The one sanity check worth failing the build over. Everything else here is informational;
+# this one decides whether the client can make a character at all.
+if md5sum "$CLIENT/Wow.exe" | grep -q 45892bdedd0ad70aed4ccd22d9fb5984; then
+    echo "   Wow.exe   : STOCK -- the exe patch did not apply" >&2
+    exit 1
+fi
+echo "   Wow.exe   : patched ($(md5sum "$CLIENT/Wow.exe" | cut -c1-12))"
 echo "   addons    : $(find "$CLIENT/Interface/AddOns" -maxdepth 1 -mindepth 1 -type d | wc -l) folders"
 echo "   ItemBrowser/AzerothAdmin: $([[ -d "$CLIENT/Interface/AddOns/ItemBrowser" ]] && echo yes || echo NO) / $([[ -d "$CLIENT/Interface/AddOns/AzerothAdmin" ]] && echo yes || echo NO)"
 

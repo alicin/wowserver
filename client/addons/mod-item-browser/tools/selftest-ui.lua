@@ -139,9 +139,16 @@ INVTYPE_WAIST, INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND = "Waist", "One-Hand", "Ma
 INVTYPE_WEAPONOFFHAND, INVTYPE_WRIST = "Off Hand", "Wrist"
 
 CREATED = {}
-function CreateFrame(_, name, _, _)
+-- Forward declaration: the tooltip method set is defined below with GameTooltip, but
+-- CreateFrame has to be able to hand it to a frame made from GameTooltipTemplate. The addon
+-- creates exactly such a frame -- its hidden scanning tooltip, the thing that actually asks the
+-- server for an item -- so a CreateFrame that cannot produce one hides the whole fetch path.
+local MakeTooltip
+
+function CreateFrame(kind, name, _, template)
     local f = widget(name)
     f._fontstring = widget(name and (name .. "Text"))
+    if kind == "GameTooltip" or template == "GameTooltipTemplate" then MakeTooltip(f) end
     if name then rawset(_G, name, f); CREATED[name] = f end
     return f
 end
@@ -155,6 +162,7 @@ ITEM_LEVEL, ITEM_MIN_LEVEL = "Item Level %d", "Requires Level %d"
 LEVEL_RANGE, USABLE_ITEMS, RESET = "Level Range", "Usable Items", "Reset"
 RETRIEVING_ITEM_INFO, YES, NO = "Retrieving item information", "Yes", "No"
 UIParent, UISpecialFrames, SlashCmdList, StaticPopupDialogs = widget("UIParent"), {}, {}, {}
+WorldFrame = widget("WorldFrame")
 Minimap = widget("Minimap")
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, m) note("chat:", m) end }
 tinsert = table.insert
@@ -192,31 +200,51 @@ end
 CACHED = { [6948] = "|cffffffff|Hitem:6948:0:0:0:0:0:0:0:80:0|h[Hearthstone]|h|r" }
 QUERIED = {}
 RENDER_LINES = 6
+
+-- WHICH CALL ASKS THE SERVER. This used to credit GetItemInfo, which is what the addon
+-- believed and what was wrong with it: on a real 3.3.5a client GetItemInfo is a pure read of
+-- itemcache.wdb and sends nothing, while SetHyperlink on an uncached id is what puts
+-- CMSG_ITEM_QUERY_SINGLE on the wire. Modelling it the old way meant the harness scored a
+-- no-op prefetch loop as working. QUERIED is therefore bumped by SetHyperlink only.
 function GetItemInfo(id)
-    QUERIED[id] = (QUERIED[id] or 0) + 1
     local link = CACHED[id]
     if not link then return nil end
     return "Hearthstone", link, 1, 1, 1, "Miscellaneous", "Junk", 1, "", 134414
 end
 
-GameTooltip = widget("GameTooltip")
-GameTooltip.lines = {}
-function GameTooltip:SetOwner(o) self.owner = o; self.lines = {} end
-function GameTooltip:IsOwned(o) return self.owner == o end
-function GameTooltip:ClearLines() self.lines = {} end
-function GameTooltip:NumLines() return #self.lines end
-function GameTooltip:AddLine(t) self.lines[#self.lines + 1] = tostring(t) end
-function GameTooltip:AddDoubleLine(l, r)
-    self.lines[#self.lines + 1] = tostring(l) .. " | " .. tostring(r)
-end
-function GameTooltip:SetHyperlink(link)
-    self.lines = { "HYPERLINK " .. tostring(link) }
-    for i = 2, RENDER_LINES do
-        self.lines[i] = "clientline" .. i        -- stats, sockets, set bonuses, flavour...
+-- MakeTooltip was forward-declared next to CreateFrame; this is its definition.
+function MakeTooltip(t)
+    t.lines = {}
+    function t:SetOwner(o) self.owner = o; self.lines = {} end
+    function t:IsOwned(o) return self.owner == o end
+    function t:ClearLines() self.lines = {} end
+    function t:NumLines() return #self.lines end
+    function t:AddLine(x) self.lines[#self.lines + 1] = tostring(x) end
+    function t:AddDoubleLine(l, r)
+        self.lines[#self.lines + 1] = tostring(l) .. " | " .. tostring(r)
     end
+    function t:SetHyperlink(link)
+        -- THE REQUEST. Record it against the item id, the way the client would send one.
+        local id = tonumber(tostring(link):match("item:(%d+)") or "")
+        if id then QUERIED[id] = (QUERIED[id] or 0) + 1 end
+        if id and not CACHED[id] then
+            -- Uncached: the client draws its one-line "Retrieving item information" stub. The
+            -- reply has not arrived yet, so the cache is deliberately NOT filled here -- a test
+            -- that wants the answer sets CACHED[id] itself.
+            self.lines = { RETRIEVING_ITEM_INFO or "Retrieving item information" }
+            return
+        end
+        self.lines = { "HYPERLINK " .. tostring(link) }
+        for i = 2, RENDER_LINES do
+            self.lines[i] = "clientline" .. i    -- stats, sockets, set bonuses, flavour...
+        end
+    end
+    function t:Show() end
+    function t:Hide() self.owner = nil end
+    return t
 end
-function GameTooltip:Show() end
-function GameTooltip:Hide() self.owner = nil end
+
+GameTooltip = MakeTooltip(widget("GameTooltip"))
 
 -- dropdown stubs that behave like the real ones in the two ways that matter: Initialize
 -- calls the init function immediately, and AddButton falls back to info.text for the value.
@@ -479,7 +507,14 @@ check(table.concat(GameTooltip.lines, " "):find("Slot | Ranged") ~= nil,
 
 -- the server answers a moment later
 CACHED[row.entry] = "|cffa335ee|Hitem:" .. row.entry .. ":0:0:0:0:0:0:0:80:0|h[x]|h|r"
+-- The poll is throttled (TOOLTIP_POLL), so a single 10 ms frame must NOT redraw yet. This half
+-- of the check is the one that matters: without the throttle the addon re-asks the server and
+-- rebuilds two tooltips on every frame of a six-second wait, ~360 times per hovered row.
 ItemBrowser_OnUpdate(frame, 0.01)
+check(GameTooltip.lines[1]:find("^HYPERLINK") == nil,
+      "the poll is throttled: a 10 ms frame does not re-ask or redraw")
+-- ...and once enough time has passed, it swaps the real tooltip in under the cursor.
+ItemBrowser_OnUpdate(frame, 0.3)
 check(GameTooltip.lines[1]:find("^HYPERLINK") ~= nil,
       "the poll swapped in the real tooltip in place: " .. GameTooltip.lines[1])
 local footer = table.concat(GameTooltip.lines, " / ")
@@ -586,6 +621,41 @@ check(W("SearchClear"):IsShown(), "the clear button appeared with the text")
 ItemBrowser_ClearSearch()
 check(W("SearchClear"):IsShown() == false, "and went away with it")
 
+
+
+print("\n== opening before the window has been laid out")
+-- THE REGRESSION TEST FOR THE FOUR-ROW SIDEBAR. On a real client a frame's GetHeight() is
+-- meaningless until the layout pass has run, and OnShow happens BEFORE it -- so the very first
+-- open measured 0, floor(0 / rowheight) gave 0, and the pool clamped that up to its minimum and
+-- LATCHED there: nothing re-measured, because the only recount trigger was an OnSizeChanged on a
+-- frame that never changes size. The sidebar showed four categories in a pane with room for
+-- seventeen and the rest was bare backdrop, until some unrelated event happened to recount.
+-- Both panes had it; only the tree was empty enough to be obvious.
+--
+-- Asserted on the RETURN VALUE rather than on frame counts, because the pools only ever grow --
+-- an earlier test in this file has already stretched them to a 700px window, so counting created
+-- frames measures that high-water mark and would pass no matter what this code did.
+frame:Hide()
+W("ListScroll"):SetHeight(0)                 -- what a not-yet-laid-out frame reports
+W("TreeScroll"):SetHeight(0)
+check(ItemBrowser_OnSizeChanged(frame) == false,
+      "a zero-height measurement is refused rather than clamped to the minimum and latched")
+check(ItemBrowserTree_Resized() == false,
+      "the sidebar refuses it too -- this is the pane the user actually saw break")
+
+-- The layout pass lands. The deferred re-measure armed by OnShow runs on the next OnUpdate.
+ItemBrowser_OnShow(frame)
+W("ListScroll"):SetHeight(400)
+W("TreeScroll"):SetHeight(400)
+check(ItemBrowser_OnSizeChanged(frame) == true,
+      "and a real measurement is accepted once the window has been laid out")
+local shownNodes = 0
+for i = 1, 60 do
+    local b = CREATED["ItemBrowserFrameTreeNode" .. i]
+    if b and b:IsShown() then shownNodes = shownNodes + 1 end
+end
+check(shownNodes > 4,
+      "the sidebar is no longer stuck at the four-node minimum: " .. shownNodes .. " nodes shown")
 
 print(string.format("\n%d passed, %d failed", pass, fail))
 os.exit(fail == 0 and 0 or 1)

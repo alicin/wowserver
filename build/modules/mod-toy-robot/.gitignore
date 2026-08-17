@@ -1,0 +1,19 @@
+# The repo-root .gitignore has a bare `data/` line, which — having no leading slash — matches a
+# directory named `data` at ANY depth. It is there for the extracted client data at the repo root
+# (a few GB of maps/vmaps/dbc), but it also silently swallows this module's
+# data/sql/db-world/**.sql, which is a git-tracked artefact that MUST ship. Losing it means the
+# item and the creature template never exist, every login logs a template audit failure, and the
+# toy is un-grantable.
+#
+# The symptom if this file is missing is nasty and delayed: `docker build` sends the whole working
+# tree as context, so a LOCAL build picks the SQL up and everything works — while CI, which builds
+# from a clean `git clone`, produces an image with no module SQL at all.
+#
+# A nested .gitignore's patterns take precedence over the parent's for paths beneath it, so
+# re-including the directory here is enough (re-including only the *.sql files would not be —
+# git never descends into an excluded directory). Same fix as mod-utility-npcs/.gitignore and
+# mod-dk-lowlevel/.gitignore.
+#
+# The tidier fix is to anchor the root pattern as `/data/`. Do that instead and delete this line
+# from all three modules.
+!/data/

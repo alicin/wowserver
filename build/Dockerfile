@@ -138,6 +138,35 @@ RUN set -e; while read -r repo ref sha; do \
 # change here.
 COPY modules/ /src/modules/
 
+# CORE PATCHES. Read build/patches/README.md before adding one -- the bar is "unreachable from a
+# script hook", not "inconvenient from a script hook", and today exactly one file clears it.
+#
+# WHY HERE: same reasoning as the COPY above. Everything earlier is the apt layer and the ~1 GB
+# core fetch, and a patch edit must not invalidate either; everything later is the compile, which
+# has to re-run anyway. It sits AFTER the module copy only so that the two cheap COPYs are
+# adjacent -- the patches apply to /src (the core checkout), which modules/ does not touch.
+#
+# WHY --check FIRST, IN ITS OWN COMMAND: `git apply` is not atomic across a directory of patches.
+# Applying 0001 and then failing on 0002 leaves the tree half-patched, and because the failure is
+# a non-zero exit the layer is discarded -- so the next build starts clean and you never see it.
+# But a patch that applies with fuzz, or applies to code that moved, produces a BUILD that is
+# wrong rather than a build that fails. Checking every patch before applying any means a core
+# bump that invalidates one fails here, in seconds, naming the file, instead of thirty minutes
+# later inside a compiler error -- or worse, not at all.
+#
+# `git apply` and not `patch`: it fails on fuzz by default rather than guessing an offset, and it
+# is already in this stage for the fetch above.
+COPY patches/ /tmp/patches/
+RUN set -e; \
+    if [ -n "$(find /tmp/patches -maxdepth 1 -name '*.patch' -print -quit)" ]; then \
+      for p in /tmp/patches/*.patch; do \
+        echo "checking $(basename "$p")"; git apply --check "$p"; \
+      done; \
+      for p in /tmp/patches/*.patch; do \
+        echo "applying $(basename "$p")"; git apply --stat --apply "$p"; \
+      done; \
+    else echo "no core patches"; fi
+
 # -DTOOLS_BUILD=none, and THERE IS NO `TOOLS` VARIABLE. Get the spelling right, because cmake
 # will not tell you: conf/dist/config.cmake (included unconditionally by the top-level
 # CMakeLists.txt) declares `set(BUILD_TOOLS_AVAILABLE_OPTIONS none all db-only maps-only)` and

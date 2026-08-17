@@ -24,13 +24,43 @@ alchem1ster/WotLK-Auctionator                  main     dirs             b4e3eb6
 migwynkriid/CleanerChat-WotLK                  main     root:CleanerChat 56d0b268389b37b5f0397729920f3034cbe499d4
 Arcitec/GearScoreLite_Reborn                   main     dirs             a396cdc93894bca2cab351627c97996253f86236
 Wishmaster117/MultiBot-Chatless                main     root:MultiBot    8c082749bf38913421975c80b2ac5ef41603d780
-bkader/Talented_WoTLK                          main     dirs             648a0ead7d664f3b220088738bc1c7e6041be090
+# REMOVED 2026-08-16 -- bkader/Talented_WoTLK @ 648a0ead7d664f3b220088738bc1c7e6041be090
+# It did not skin the talent frame, it REPLACED it. Talented.lua:258-259 does
+#     self:RawHook("ToggleTalentFrame", true)
+#     self:RawHook("ToggleGlyphFrame",  true)
+# and AceHook's RawHook with hookSecure=true swaps the global outright for
+# Talented:ToggleTalentFrame (Talented.lua:329-337), which shows TalentedFrame and never calls
+# self.hooks.* -- so Blizzard's PlayerTalentFrame and Blizzard_GlyphUI were unreachable, not
+# restyled. It also rebound TalentMicroButton's OnClick at :270.
+#
+# Two reasons it is gone rather than configured: the stock calculator was wanted back, and
+# Talented would have been wrong at the phase-3 cap anyway -- Options.lua:4 hardcodes
+# max_talent_points = 71 while Rate.Talent 1.4 yields 85 points at cap 70 and 99 at cap 80.
+#
+# Deleting this line alone would have changed nothing: client-addons.sh is install-only and
+# leaves unmanaged folders alone (its own header, lines 5-6), and package-extras.sh builds the
+# shipped zip by enumerating the LIVE AddOns directory, not this manifest. The installed folder
+# had to go too. This line only stops it coming back on the next client-addons.sh run.
 stevemcqueenz/gathermate-and-database-3.3.5a   master   dirs             b102c388c61571240ce5f786e2ac5a739e36d474
 
 # Written in this repo. Its Data/ is generated from the live world DB by
 # client/addons/mod-item-browser/tools/regen.sh -- regenerate before cutting a client pack
 # if item_template has changed, or friends browse a database the server no longer agrees with.
 client/addons/mod-item-browser/ItemBrowser    -        local:ItemBrowser -
+# The Demon Hunter's client half. Two jobs, and only the first is class-gated:
+#
+#   Movement.lua  double jump and glide. The second jump CANNOT come from the server -- the
+#                 stock client never sends a second MSG_MOVE_JUMP while airborne, and that
+#                 pattern is literally what jump-hack detection looks for -- so it is a secure
+#                 action button behind a SetOverrideBindingClick. Read the addon's README.md
+#                 before touching it; the taint reasoning is the whole design.
+#   ClassUI.lua   deliberately NOT class-gated. FrameXML indexes CLASS_ICON_TCOORDS and
+#                 RAID_CLASS_COLORS by class token, and the character who errors on a missing
+#                 DEMONHUNTER key is the priest grouped with one, not the Demon Hunter. This
+#                 file is why a friend without the patch MPQ still gets working party frames.
+#
+# Shipped to everyone, not just to Demon Hunters, for that second reason.
+client/addons/mod-demon-hunter/DemonHunter     -        local:DemonHunter -
 # AzerothAdmin must be root: -- its .toc is at the repo root, and mode=dirs would find no addon
 # there while happily installing Libraries/ as a top-level AddOn (Libraries/Ace3.toc satisfies the
 # installer's .toc test). The folder name is load-bearing: 4 hardcoded Interface\AddOns\AzerothAdmin

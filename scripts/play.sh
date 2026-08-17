@@ -41,6 +41,32 @@ export WINEDEBUG="${WINEDEBUG:--all}"
 export DISPLAY="${DISPLAY:-:0}"
 unset WAYLAND_DISPLAY
 
+# Wow.exe is a 2008 32-bit PE without the LARGE_ADDRESS_AWARE flag, so the Windows side of the
+# process gets 2 GB and no more. A full addon set plus patch-Z is enough to walk into that
+# ceiling roughly half an hour into a session, and the client does not always die cleanly when
+# it does -- it wedges, and has to be killed. This lifts the cap to 4 GB.  docs/client.md
+export WINE_LARGE_ADDRESS_AWARE=1
+
+# d3d9 -> DXVK -> Vulkan. The alternative is Wine's builtin wined3d, which keeps a
+# system-memory shadow of every D3D9 resource inside the 2 GB above and is the thing that
+# fills it. The prefix also carries this as a registry override; the env var is belt and
+# braces, and makes it obvious here rather than three levels down in user.reg.
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-d3d9=n,b}"
+export DXVK_STATE_CACHE_PATH="$PREFIX/dxvk-cache"
+mkdir -p "$DXVK_STATE_CACHE_PATH"
+# The override failing is silent -- `native,builtin` just falls back to wined3d and you get the
+# old behaviour back without being told. So write the DXVK log somewhere fixed and check it:
+# a d3d9.log naming a device is proof DXVK loaded, no log at all means it did not.
+export DXVK_LOG_PATH="$PREFIX/dxvk-log"
+mkdir -p "$DXVK_LOG_PATH"
+# Uncomment for an on-screen version/fps readout instead.
+# export DXVK_HUD=fps,version
+
+# Something in the login environment exports DRI_PRIME=0, which Mesa rejects outright
+# ("Invalid value (0) for DRI_PRIME") on every launch. One GPU here, so there is nothing to
+# select; drop it rather than keep printing the warning.
+if [[ "${DRI_PRIME:-}" == "0" ]]; then unset DRI_PRIME; fi
+
 if [[ ! -d "$PREFIX" ]]; then
     echo "== creating wine prefix (first run, takes a minute)"
     WINEDLLOVERRIDES="mscoree=d;mshtml=d" wineboot -u >/dev/null 2>&1 || true

@@ -1,0 +1,21 @@
+## Interface: 30300
+## Title: Demon Hunter
+## Notes: Double jump and glide for the Demon Hunter class, plus defensive class-UI constants so party and raid frames survive a Demon Hunter in the group.
+## Author: wowserver
+## Version: 1.0
+## SavedVariables: DemonHunterSaved
+## DefaultState: enabled
+
+# Load order matters.
+#   Core.lua declares the DemonHunter table, Say(), the saved-variable defaults and the event
+#   frame, so it has to come first -- everything below stores itself into that table.
+#   ClassUI.lua runs its whole job at load time and is deliberately NOT class-gated: the
+#   character who crashes on a missing CLASS_ICON_TCOORDS.DEMONHUNTER is the priest standing
+#   next to the Demon Hunter, not the Demon Hunter. See the header of that file.
+#   Movement.lua is class-gated and does nothing until Core calls it at PLAYER_LOGIN.
+#
+# Bindings.xml is deliberately NOT listed: the client loads an addon's Bindings.xml by itself,
+# and naming it here would load it twice. (Same rule as ItemBrowser.toc.)
+Core.lua
+ClassUI.lua
+Movement.lua

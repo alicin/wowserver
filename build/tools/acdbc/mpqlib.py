@@ -17,8 +17,27 @@ because every one of them is a silent-failure mode:
   * NO (attributes) file. MPQ_CREATE_ATTRIBUTES stores the source file's mtime, which makes
     the archive differ on every rebuild from identical inputs and destroys reproducibility.
   * Unsigned is fine. SFileVerifyArchive returns ERROR_NO_SIGNATURE on every Blizzard archive
-    in this install, and the client's only integrity check is an RSA check over
-    Interface\\FrameXML\\FrameXML.toc + Bindings.xml, which DBFilesClient\\* never touches.
+    in this install, so an unsigned custom archive is normal. The ARCHIVE is not signed.
+
+THE CONTENT SIGNATURE CHECK, CORRECTED
+--------------------------------------
+This docstring used to say the client's only integrity check was an RSA check over
+`Interface\\FrameXML\\FrameXML.toc` + `Bindings.xml`. **That was one of two checks.** There is a
+second, structurally identical one over `Interface\\GlueXML\\GlueXML.toc`, and it covers
+`CharacterCreate.lua`, `CharacterCreate.xml` and `GlueStrings.lua`.
+
+Both were located by disassembly and then MEASURED (docs/demon-hunters.md 2.2): a modified file
+from either tree makes the client log "<tree> is modified or corrupt" and **never load that
+tree's TOC at all** -- the load call is reachable only from jump-table case 3, the success
+branch. It is not a warning. On a stock binary the glue UI simply does not come up.
+
+    GlueXML  check at 0x004da7e5, dispatch table 0x004da9b4, success 0x004da835
+    FrameXML check at 0x0052abd9, dispatch table 0x0052aeb4, success 0x0052ac1c
+
+So: `DBFilesClient\\*`, `Interface\\Icons\\*` and the class-icon atlases are outside both trees
+and can be shipped freely -- which is why the Death Knight feature works on a stock client.
+Anything inside `Interface\\FrameXML\\` or `Interface\\GlueXML\\` needs
+`client/tools/patch-wow-exe.py`, which neutralises both checks in twelve bytes each.
 """
 
 import ctypes

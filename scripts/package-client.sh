@@ -10,12 +10,19 @@
 #     a client pointing at 127.0.0.1 is the single most predictable way to waste an evening.
 #   * strips per-machine state (WTF/Account, Cache, Logs, Errors) so nobody inherits your
 #     keybinds, your saved account name or a stale addon cache.
-#   * rebuilds and installs the Death Knight client patch (Data/patch-Z.MPQ), and REFUSES to
-#     package a client without it while the feature is enabled. AzerothCore marks every
-#     Spell.dbc Description locale FT_NA and never reads it, so the server physically cannot
-#     send a tooltip -- a friend missing that 5 MB file gets a Death Knight whose only ability
-#     has no name, no icon and no spellbook entry. Shipping that silently is the failure mode
-#     this check exists to prevent. See docs/death-knights.md.
+#   * rebuilds and installs the ONE client patch (Data/patch-Z.MPQ) via
+#     scripts/build-client-patch.sh, which chains BOTH class generators. There is exactly one
+#     archive -- two cannot both supply Spell.dbc -- so building it with either generator alone
+#     silently deletes the other class from the pack. It REFUSES to package a client without it
+#     while either feature is enabled: AzerothCore marks every Spell.dbc Description locale
+#     FT_NA and never reads it, so the server physically cannot send a tooltip, and a friend
+#     missing that file gets abilities with no name, no icon and no spellbook entry.
+#     See docs/death-knights.md and docs/demon-hunters.md.
+#   * PATCHES THE STAGED Wow.exe when the Demon Hunter is enabled. An eleventh ChrClasses
+#     record on a stock binary does not merely hide the new class -- CharacterCreate.lua bails
+#     out of CharacterCreateEnumerateClasses and leaves EVERY class button unconfigured, for
+#     every race. A pack with the archive and without the exe patch is a pack nobody can make a
+#     character on. docs/demon-hunters.md 2.
 #   * writes a MANIFEST with the addon pins and the patch sha256, so "which build are you on"
 #     and "which spell data is your client on" are both answerable.
 #   * emits a sha256 next to the zip.
@@ -50,6 +57,18 @@ DK_TOOL="$REPO/build/modules/mod-dk-lowlevel/tools/dkspells.py"
 DK_CONF="$REPO/conf/modules/mod_dk_lowlevel.conf"
 DK_DBC_IN="/srv/wow/data/dbc"   # stock server DBCs, never modified -- they are the clone source
 DK_SLOT="Z"                     # slot KEY, same vocabulary as dkspells.py --slot
+EXE_TOOL="$REPO/client/tools/patch-wow-exe.py"
+DH_CONF="$REPO/conf/modules/mod_demon_hunter.conf"
+
+# The Demon Hunter half is required on exactly the same terms as the Death Knight half, read
+# from its own conf. --dk-patch skip disables both, because there is only one archive.
+dh_required() {
+    case "$DK_MODE" in
+        skip)    return 1;;
+        require) return 0;;
+        *)       grep -Eq '^[[:space:]]*DemonHunter\.Enable[[:space:]]*=[[:space:]]*1[[:space:]]*$' "$DH_CONF" 2>/dev/null;;
+    esac
+}
 DK_MODE="auto"
 
 # Slot key -> path under Data/. 'Z' is the top of the client's single-character patch sort, so
@@ -113,11 +132,17 @@ if dk_required; then
         # set -euo pipefail: a generator that fails its own invariants (SQL row vs DBC row
         # mismatch, non-dense spell_ranks, wrong column count) aborts the whole package here,
         # which is the point -- a pack built from a half-written MPQ is worse than no pack.
-        python3 "$DK_TOOL" \
-            --dbc-in "$DK_DBC_IN" \
-            --out    "$REPO/.work/out" \
+        # BOTH CLASSES, THROUGH THE WRAPPER. This used to be `dkspells.py --mpq`, and once the
+        # Demon Hunter existed that was a silent data-loss bug: there is exactly one archive,
+        # the Death Knight generator would have rebuilt it from its three DBCs alone, and every
+        # Demon Hunter record in the client would have vanished from the pack with nothing
+        # logged. build-client-patch.sh chains the two generators in the one correct order and
+        # is the only supported way to produce this file. See docs/demon-hunters.md 5.2.
+        "$REPO/scripts/build-client-patch.sh" \
             --slot   "$DK_SLOT" \
-            --mpq    "$DK_MPQ"
+            --out    "$REPO/.work/out" \
+            --client "$CLIENT" \
+            --install
         # Reproduces the client's archive-priority model and fails if something outranks us
         # for DBFilesClient\Spell.dbc. Cheap, and it runs BEFORE the multi-minute zip.
         python3 "$DK_TOOL" --verify --client-data "$CLIENT/Data" --slot "$DK_SLOT"
@@ -151,7 +176,31 @@ if dk_required; then
         fi
     done
 else
-    echo "== dk client patch: not required (--dk-patch $DK_MODE)"
+    echo "== client patch: not required (--dk-patch $DK_MODE)"
+fi
+
+# ------------------------------------------------------------------------------------------
+# THE PATCHED Wow.exe.
+#
+# The Demon Hunter is an ELEVENTH class, and ChrClasses.dbc having eleven records is fatal on a
+# stock binary: MAX_CLASSES_PER_RACE is 10 in CharacterCreate.lua, and raising it means editing
+# a file inside the RSA-signed GlueXML tree. A friend who unzips this pack onto a stock exe does
+# not get "no Demon Hunter" -- they get a character-creation screen with NO CLASS BUTTONS AT
+# ALL, for every race. That is why this is not optional and not a warning.
+#
+# Patched in the STAGE, never in the working client: the dev box keeps whatever state it had,
+# and re-running the packer is idempotent either way (the patcher is).
+if dh_required; then
+    echo "== patching the staged Wow.exe"
+    if [[ ! -f "$EXE_TOOL" ]]; then
+        echo "package-client.sh: $EXE_TOOL is missing and the Demon Hunter is enabled.
+  A pack whose Wow.exe is stock has NO class buttons on the create screen, for every race.
+  docs/demon-hunters.md 2" >&2
+        exit 1
+    fi
+    python3 "$EXE_TOOL" --exe "$S/Wow.exe" --no-backup | grep -E "patched|already|new md5" || true
+    python3 "$EXE_TOOL" --exe "$S/Wow.exe" --check | grep -q "patched" \
+      || { echo "package-client.sh: the staged Wow.exe did not end up patched" >&2; exit 1; }
 fi
 
 STAMP="$(date +%Y%m%d-%H%M)"
@@ -225,6 +274,19 @@ echo "== manifest"
         printf '  %-46s %s\n' "sha256" "$(sha256sum "$DK_STAGED" | cut -d' ' -f1)"
     else
         echo "  none -- stock Death Knights (level 55, Acherus)"
+    fi
+    echo
+    # The other half of "which build are you on". A friend whose create screen is blank has a
+    # stock exe, and this line is how they find that out without a disassembler.
+    echo "Wow.exe:"
+    if [[ -f "$S/Wow.exe" ]]; then
+        printf '  %-46s %s bytes\n' "size" "$(stat -c%s "$S/Wow.exe")"
+        printf '  %-46s %s\n' "md5" "$(md5sum "$S/Wow.exe" | cut -d" " -f1)"
+        if python3 "$EXE_TOOL" --exe "$S/Wow.exe" --check 2>/dev/null | grep -q ": patched"; then
+            echo "  UI signature checks           NEUTRALISED (required for Demon Hunter)"
+        else
+            echo "  UI signature checks           stock -- no eleventh class on this client"
+        fi
     fi
     echo
     echo "AddOns folders: $(find "$S/Interface/AddOns" -maxdepth 1 -mindepth 1 -type d | wc -l)"

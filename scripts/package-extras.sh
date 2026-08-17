@@ -129,7 +129,7 @@ for t in zip unzip jq sha256sum; do
 done
 [[ -f "$CLIENT/Wow.exe" ]] || { echo "package-extras.sh: no Wow.exe under $CLIENT" >&2; exit 1; }
 
-ALL_IDS=(dk-patch addons gm-addons realmlist)
+ALL_IDS=(exe-patch dk-patch addons gm-addons realmlist)
 if [[ -n "$ONLY" ]]; then
     IFS=',' read -r -a WANT <<< "$ONLY"
     for w in "${WANT[@]}"; do
@@ -209,6 +209,92 @@ seal() {
 }
 
 # ---------------------------------------------------------------------------------------- #
+# 0. exe-patch -- the 7.7 MB binary WITHOUT WHICH THE CREATE SCREEN HAS NO CLASS BUTTONS
+#
+# This is the newest and least skippable artefact on the list, and the failure it prevents is
+# not "the Demon Hunter is missing" -- it is "character creation is broken for every race".
+# ---------------------------------------------------------------------------------------- #
+if in_scope exe-patch; then
+    echo "== exe-patch"
+    EXE="$CLIENT/Wow.exe"
+    TOOL="$REPO/client/tools/patch-wow-exe.py"
+    [[ -f "$EXE" ]]  || { echo "package-extras.sh: no $EXE" >&2; exit 1; }
+    [[ -f "$TOOL" ]] || { echo "package-extras.sh: no $TOOL -- cannot verify the exe is patched" >&2; exit 1; }
+
+    # Ship a PATCHED binary or ship nothing. An unpatched Wow.exe in an artefact called
+    # "exe-patch" is the single most confusing thing this script could hand somebody.
+    if ! python3 "$TOOL" --exe "$EXE" --check 2>/dev/null | grep -q ": patched"; then
+        echo "package-extras.sh: $EXE is NOT patched, so there is nothing to ship.
+  Run:  client/tools/patch-wow-exe.py
+  Then re-run this. docs/demon-hunters.md 2 explains what the patch does and why an
+  eleventh class cannot exist without it." >&2
+        exit 1
+    fi
+
+    F="$OUT/exe-patch-$STAMP.zip"; rm -f "$F"
+    cat > "$TMPD/README-exe-patch.txt" <<EOF
+Patched Wow.exe -- required for the Demon Hunter
+built $NOW   realmlist $REALM
+
+WHAT THIS IS
+  Your game executable with two twelve-byte edits. Nothing else about it changes: same size,
+  same version, same everything you can see.
+
+WHY YOU CANNOT SKIP IT
+  The Demon Hunter is a real eleventh class, so ChrClasses.dbc now has eleven records. The
+  stock client cannot cope with that. Interface\\GlueXML\\CharacterCreate.lua says
+
+      MAX_CLASSES_PER_RACE = 10;
+
+  and at eleven it gives up on the whole loop -- leaving EVERY class button on the create
+  screen unconfigured, for every race. Not just the new one. You would be unable to make any
+  character at all.
+
+  Raising that limit means editing a file inside the client's RSA-signed GlueXML tree, and a
+  stock client refuses to load that tree at all when it has been touched: it writes
+  "GlueXML is modified or corrupt" to Logs\\GlueXML.log and never draws a login screen. The
+  two edits in this binary are what let it load. They touch nothing else -- not the game
+  server connection, not the archive loader, not any anti-cheat.
+
+INSTALL
+  1. Fully quit WoW.
+  2. Back up your current Wow.exe if you like (rename it Wow.exe.orig).
+  3. Copy the Wow.exe from this zip into your client folder, replacing the old one.
+  4. Start Wow.exe directly (not Launcher.exe).
+
+CHECK IT WORKED
+  At the character-creation screen for a Night Elf or a Blood Elf you should see ELEVEN class
+  buttons, one of them Demon Hunter. On any other race Demon Hunter is visible but greyed out.
+
+  If the create screen has NO class buttons at all, you have the new patch-Z.MPQ and the old
+  exe. Install this file.
+  If there is no Demon Hunter button but everything else is fine, you have the new exe and the
+  old patch-Z.MPQ. Install the class spell patch as well.
+
+BOTH FILES OR NEITHER. They are a pair.
+EOF
+    ( cd "$CLIENT" && zip -q -9 "$F" "Wow.exe" ) \
+      && ( cd "$TMPD" && zip -q -9 "$F" "README-exe-patch.txt" )
+    SHA="$(seal "$F")"
+    record exe-patch patch 15 "Patched Wow.exe (required for Demon Hunter)" "$F" "$SHA" \
+"Your game executable with two twelve-byte edits, and the one download nobody can skip once the
+Demon Hunter is live.
+
+ChrClasses.dbc now has eleven class records. A stock client cannot cope: CharacterCreate.lua
+hardcodes MAX_CLASSES_PER_RACE = 10 and, at eleven, abandons the loop that configures the class
+buttons -- so the create screen ends up with NO class buttons at all, for every race, not just
+the new one. Raising the limit means editing a file inside the RSA-signed GlueXML tree, which a
+stock client refuses to load once touched.
+
+The edits neutralise those two UI signature checks and nothing else. Same file size, same
+version. Pair it with the class spell patch -- both files or neither." \
+"EVERYONE, before your next login. Without it you cannot create ANY character, of any class. Install it together with the class spell patch." \
+"Replace <WoW>/Wow.exe, then start Wow.exe directly (not Launcher.exe)." "$STAMP" \
+        "Wow.exe" "README-exe-patch.txt"
+    ls -l "$F" | awk '{printf "   %s bytes  %s\n", $5, $NF}'
+fi
+
+# ---------------------------------------------------------------------------------------- #
 # 1. dk-patch -- the 4 MB file that is the entire reason low-level Death Knights work
 # ---------------------------------------------------------------------------------------- #
 if in_scope dk-patch; then
@@ -262,19 +348,26 @@ EOF
     ( cd "$CLIENT" && zip -q -9 "$F" "$DK_REL" )
     ( cd "$TMPD"   && zip -q -9 "$F" "README-dk-patch.txt" )
     SHA="$(seal "$F")"
-    record dk-patch patch 20 "Death Knight spell patch" "$F" "$SHA" \
-"The client-side half of this realm's custom low-level Death Knights: one small MPQ archive
-containing a patched Spell.dbc.
+    record dk-patch patch 20 "Class data patch (Death Knight + Demon Hunter)" "$F" "$SHA" \
+"The client-side half of BOTH custom classes on this realm, in one archive: patched Spell.dbc,
+ChrClasses.dbc, CharBaseInfo.dbc, the talent and skill files, the character-creation UI and the
+class-icon art.
 
-AzerothCore never sends spell descriptions (every Spell.dbc Description locale is FT_NA in
-the core, read and discarded), so custom spell 90000 -- Icy Touch, Rank 1 -- simply does not
-exist in an unpatched client. No name, no icon, no spellbook entry, and an empty action bar
-on a level-1 Death Knight.
+AzerothCore never sends spell descriptions (every Spell.dbc Description locale is FT_NA in the
+core, read and discarded), so a custom spell simply does not exist in an unpatched client -- no
+name, no icon, no spellbook entry. That is why the Death Knight needs this file. The Demon
+Hunter needs it for more than that: it is where the eleventh class itself lives.
+
+There is exactly ONE archive for both classes, because two archives cannot both supply
+Spell.dbc -- the higher-priority one wins outright and the other's spells vanish.
 
 Drops into <WoW>/$DK_REL and needs a full client restart. Verify with
-/dump GetSpellInfo(90000), which should answer \"Icy Touch\", \"Rank 1\"." \
-"Anyone who already has the client but rolled -- or plans to roll -- a Death Knight, and anyone told the spell data changed. Already inside the full client zip; grab this instead of re-downloading it." \
-"Copy into <WoW>/$DK_REL, then restart the client." "$STAMP" \
+/dump GetSpellInfo(90000), which should answer \"Icy Touch\", \"Rank 1\".
+
+PAIR THIS WITH THE PATCHED Wow.exe. This archive on a stock exe leaves the character-creation
+screen with no class buttons at all. Both files or neither." \
+"EVERYONE, together with the patched Wow.exe. Required for Death Knights, and required for the Demon Hunter to exist. Already inside the full client zip; grab this instead of re-downloading 17 GB." \
+"Copy into <WoW>/$DK_REL, then restart the client. Install the patched Wow.exe at the same time." "$STAMP" \
         "$DK_REL" "README-dk-patch.txt"
     ls -l "$F" | awk '{printf "   %s bytes  %s\n", $5, $NF}'
 fi
@@ -349,7 +442,7 @@ if in_scope addons; then
     record addons addons 30 "Addon pack (${#NAMES[@]} addons)" "$F" "$SHA" \
 "The full addon set this realm plays with, pinned by commit so we are all on the same build:
 DragonUI, DBM (all instance modules), WeakAuras, Questie, Skada, Auctionator, AdiBags,
-GatherMate, OmniCC, Talented and the rest -- $( printf '%s' "${#NAMES[@]}" ) folders.
+GatherMate, OmniCC and the rest -- $( printf '%s' "${#NAMES[@]}" ) folders.
 
 Stock Blizzard_* UI is excluded on purpose: every client already has it, and unpacking an
 older copy over it is a good way to break the default interface. The GM tools are excluded
@@ -357,7 +450,13 @@ too and ship separately.
 
 Unzips over your client root, so Interface/AddOns/ lands where it belongs. Remember to tick
 \"Load out of date AddOns\" at character select -- these are 3.3.5a forks and most report an
-older interface number." \
+older interface number.
+
+ONE MANUAL STEP IF YOU INSTALLED AN EARLIER PACK: delete the folder
+Interface/AddOns/Talented. Unzipping only ADDS and OVERWRITES files, so an addon that has been
+dropped from the pack stays on your disk forever until you remove it by hand. Talented replaced
+the whole talent window with its own and stopped the normal talent calculator from opening, so
+it is gone from this pack -- but your copy will keep loading until you delete that folder." \
 "Anyone who already has a client and wants our UI, or wants to match the version everyone else is running. Already inside the full client zip." \
 "Unzip over the folder containing Wow.exe." "$STAMP" \
         "Interface/AddOns/*" "README-addons.txt"

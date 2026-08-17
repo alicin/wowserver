@@ -33,6 +33,7 @@ quietly do not.
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -41,6 +42,25 @@ from typing import Dict, List, Optional, Tuple
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULE_DIR = os.path.dirname(TOOLS_DIR)                       # build/modules/mod-dk-lowlevel
 REPO_ROOT = os.path.abspath(os.path.join(MODULE_DIR, "..", "..", ".."))
+
+# Bootstrapped here as well as in dkspells.py so this file stays importable on its own -- it is
+# the spec, and `python3 -c "import dk_spec; print(dk_spec.ABILITIES)"` is a reasonable thing to
+# do. acdbc lives in build/tools because both class features write into the one patch-Z.MPQ.
+sys.path.insert(0, os.path.join(REPO_ROOT, "build", "tools"))
+
+from acdbc import dbc_tables                                       # noqa: E402
+
+# WHICH DBC FILES THIS FEATURE OWNS.
+#
+# Not `dbc_tables.ALL_TABLES` -- that is the registry of every table the toolkit knows how to
+# read, and it grew past this feature when the Demon Hunter arrived (ChrClasses, CharBaseInfo,
+# Talent, TalentTab, SkillLine, SkillRaceClassInfo, SpellShapeshiftForm). A generator must
+# iterate the tables IT emits, or it tries to save a Dbc it never opened. The Death Knight
+# feature touches exactly these three and has since the first slice.
+DBC_TABLES = (dbc_tables.SPELL_DBC,
+              dbc_tables.SKILLLINEABILITY_DBC,
+              dbc_tables.CHARSTARTOUTFIT_DBC)
+DBC_BY_SQL_NAME = {t.sql_table: t for t in DBC_TABLES}
 
 SQL_DIR = os.path.join(MODULE_DIR, "data", "sql", "db-world", "base")
 HEADER_PATH = os.path.join(MODULE_DIR, "src", "dk_progression.h")

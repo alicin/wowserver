@@ -278,10 +278,12 @@ and set bonuses, "Chance on hit" procs, Use effects, durability, flavour text, t
 "Requires Level" line -- and only from data the server has sent it. An addon cannot fake that
 and this one does not try. Three parts:
 
-1. **Prefetch.** Every time the list is re-filled, the ids now on screen are queued. Four are
-   issued every 0.2 s (so at most 20 item queries a second while you scroll), each id asked at
-   most once per session. An item you have merely scrolled past is usually already cached by
-   the time you hover it.
+1. **Prefetch.** Every time the list is re-filled, the ids now on screen are pushed to the
+   *front* of a queue. Four are issued every 0.2 s (so at most 20 item queries a second while
+   you scroll), and an id is re-asked at most once every 30 s. An item you have merely scrolled
+   past is usually already cached by the time you hover it. Front-of-queue matters: the drain is
+   20 ids a second and every redraw enqueues another page, so on the unfiltered 46,098-row list
+   a back-of-queue id would wait minutes for its turn.
 2. **Hover.** If `GetItemInfo(id)` returns a name, the client has the item, and
    `GameTooltip:SetHyperlink(link)` draws the genuine tooltip -- identical to hovering the item
    in a bag -- plus a small footer this addon adds: `Armor / Plate`, `id 51220`, the equipment
@@ -290,19 +292,39 @@ and this one does not try. Three parts:
    `RETRIEVING_ITEM_INFO` string, and `GetItemInfo` is polled for six seconds; the moment it
    resolves the tooltip is replaced in place under the still-hovering cursor.
 
-**Why the gate is `GetItemInfo` and not `SetHyperlink` itself.** This is the trap.
-`SetHyperlink("item:49623")` on an uncached item does not fail and does not return anything --
-it draws a one-line tooltip reading "Retrieving item information", which looks like a bug in
-the addon and tells you nothing. `GetItemInfo` returning a name is the only reliable "the
-client has this item" test 3.3.5 offers, so it decides which of the two tooltips gets drawn.
-As a second line of defence, the real path checks `GameTooltip:NumLines() > 1` afterwards and
-falls back to the summary if the client drew a stub anyway, which a truncated `itemcache.wdb`
-record can cause.
+**Which call asks the server, and the bug that came of getting it wrong.** This page used to
+say that touching `GetItemInfo()` sent `CMSG_ITEM_QUERY_SINGLE`. **It does not**, and that
+mistake cost the addon its tooltips for every item the client had not already met in ordinary
+play — which is essentially all of them.
 
-The polling is not laziness. Touching `GetItemInfo()` for an unknown item returns nil *and*
-sends `CMSG_ITEM_QUERY_SINGLE`; the reply arrives asynchronously and 3.3.5 has no event for it
-(`GET_ITEM_INFO_RECEIVED` does not exist until Mists, and there is no callback form). Polling
-one id per frame is the whole available API.
+`GetItemInfo` is a pure read of `itemcache.wdb`. Disassembled from this realm's own client:
+`Script_GetItemInfo` (`Wow.exe` 0x516c60) calls the item-record-cache getter (0x67ca30) with a
+**NULL completion callback**, and that getter's contract is *cache miss + NULL callback → return
+nothing, send nothing*. The same getter with a non-NULL callback is what allocates a pending
+record and puts opcode `0x56` (`CMSG_ITEM_QUERY_SINGLE`) on the wire, and the only Lua entry
+point that reaches it that way is a tooltip `SetHyperlink`.
+
+So the two calls do different jobs and both are needed:
+
+| call | what it does |
+|---|---|
+| `GameTooltip:SetHyperlink("item:<id>")` | **asks the server**, and draws a one-line "Retrieving item information" stub while it waits |
+| `GetItemInfo(<id>)` | **checks the cache**, and returns nil until the reply lands |
+
+The old code had the asking call gated behind the checking call, so it could only ever ask for
+items it already had. `AskServer()` now issues the `SetHyperlink` on a *private, never-shown*
+tooltip — private because other addons on this realm hook `GameTooltip:SetHyperlink`
+(Auctionator does), and 20 warm-up calls a second have no business running their handlers.
+
+`GetItemInfo` is still the gate for *drawing*, because a returned name is the only reliable
+"the client has this item now" test 3.3.5 offers. As a second line of defence the real path
+checks `GameTooltip:NumLines() > 1` afterwards and falls back to the summary if the client drew
+a stub anyway, which a truncated `itemcache.wdb` record can cause — and `DrawTooltip()` repaints
+the summary when that happens, so a failed attempt never leaves an empty frame under the cursor.
+
+The polling is not laziness: the reply arrives asynchronously and 3.3.5 has no event for it
+(`GET_ITEM_INFO_RECEIVED` does not exist until Cataclysm, and there is no callback form).
+Re-asking four times a second for six seconds is the whole available API.
 
 **Failure modes.** If the server never answers -- mid-loading-screen, dropped reply, an id the
 server does not have -- you keep the summary, the poll gives up after six seconds, and moving
@@ -472,7 +494,10 @@ Needs a human in game:
   in the client's `ItemSet.dbc`; whether the client renders sockets, set bonuses and procs for
   an item it has only learned about through a query is the part only the client can answer;
 * that the prefetch actually warms the cache — hover a row you have never scrolled to and
-  watch whether it flickers through the summary;
+  watch whether it flickers through the summary. (This was the one unverified assumption on
+  this list, and it turned out to be false: see "Which call asks the server" above. The
+  self-test now models `SetHyperlink` rather than `GetItemInfo` as the request, so a
+  regression here fails `tools/selftest.sh` instead of waiting for a human.)
 * **resizing**: that dragging the grip re-flows the list and that the row count follows;
 * that the minimap button lands where the drag put it after a `/reload`, and that the keybind
   shows up under Key Bindings → Item Browser;

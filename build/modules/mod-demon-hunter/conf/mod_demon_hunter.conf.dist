@@ -1,0 +1,112 @@
+[worldserver]
+
+########################################################################################
+# mod-demon-hunter
+#
+# The Demon Hunter as a real player class, class id 10. This file MUST exist:
+# modules/CMakeLists.txt builds the compile-time CONFIG_FILE_LIST from
+# `file(GLOB ${MODULE_CONFIG_PATH}/*.conf.dist)` with the .dist stripped, so a module with
+# no conf.dist never gets its .conf read at all and every key silently falls back to its
+# compiled-in default.
+#
+# The values below ARE the module's compiled-in defaults (demon_hunter.cpp
+# DemonHunterConfig::Load, and the literal `false` passed to GetOption for the master
+# switch). Keep the two in sync: on this deployment deploy/docker-compose.yml bind-mounts
+# conf/modules over /opt/ac/etc/modules, which shadows the installed copy of this file
+# entirely, so an operator who omits a key gets the compiled default rather than what is
+# written here.
+#
+# No inline comments anywhere in this file. The parser has no inline-comment handling --
+# `Key = 1  # note` reads the value as the whole string after the `=`.
+########################################################################################
+
+#
+#    DemonHunter.Enable
+#        Description: Master switch. When 0 the module is inert: no spells are granted, the
+#                     OnPlayerIsClass hook returns "no opinion" for every context, and the
+#                     Double Jump / Glide falling gate does not apply.
+#
+#                     SHIP THIS AS 0. Turning it on before the data half of the feature is
+#                     live grants spell IDs that do not resolve, and -- much worse -- makes
+#                     the class answer as a Rogue for CLASS_CONTEXT_STATS before there are
+#                     any player_class_stats rows for class 10 to be a Rogue with. The
+#                     intended order is: apply the SQL, restart, verify a level-1 Demon
+#                     Hunter can be created and has non-zero attack power, THEN flip this
+#                     and `.reload config`.
+#        Default:     0 (disabled)
+#
+
+DemonHunter.Enable = 0
+
+#
+#    DemonHunter.DualWieldLevel
+#        Description: Level at which Dual Wield (spell 674) is granted. 0 disables the grant
+#                     entirely.
+#
+#                     This is not a convenience. Spell 674's only SkillLineAbility row is
+#                     (SkillLine 118, ClassMask 109, AcquireMethod 2), and 109 is
+#                     warrior|hunter|rogue|death knight|shaman -- class 10's bit is not in
+#                     it, so learnSkillRewardedSpells skips the row and the Demon Hunter
+#                     gets the Dual Wield SKILL from playercreateinfo_skills without the
+#                     SPELL. SPELL_EFFECT_DUAL_WIELD is the only thing in the core that sets
+#                     CanDualWield for a player, and without CanDualWield
+#                     Player::FindEquipSlot never offers the off-hand slot at all.
+#
+#                     Setting this to 0 means a Demon Hunter can never equip two weapons.
+#                     There is no situation in which that is the intended realm behaviour;
+#                     the knob exists so the grant can be switched off if the data half ever
+#                     takes it over by widening the stock ClassMask in skilllineability_dbc.
+#        Default:     1
+#
+
+DemonHunter.DualWieldLevel = 1
+
+#
+#    DemonHunter.ParryLevel
+#        Description: Level at which Parry (spell 3127) is granted. 0 disables the grant
+#                     entirely.
+#
+#                     Parry is trainer-taught for the four classes that have it (ClassMask
+#                     15, AcquireMethod 0) and automatic for Death Knights only (ClassMask
+#                     32, AcquireMethod 1). A Demon Hunter is in neither mask and has no
+#                     class trainer, so nothing else can ever grant it.
+#
+#                     SPELL_EFFECT_PARRY is what calls Player::SetCanParry, and
+#                     UpdateParryPercentage produces nothing without it -- which would make
+#                     build/patches/0001's parry_cap entry for class 10 dead code and leave
+#                     a character whose sheet honestly reads 0% parry.
+#
+#                     1 rather than 6. The cheapest stock Parry trainer requires level 6 and
+#                     the dearest requires 12, but those levels are a gold sink attached to
+#                     a trainer visit that a Demon Hunter cannot make. A five-level window in
+#                     which the class silently defends differently from the stat template it
+#                     is derived from is not worth the fidelity.
+#        Default:     1
+#
+
+DemonHunter.ParryLevel = 1
+
+#
+#    DemonHunter.GrantRacials
+#        Description: Grant the one racial per elf race whose stock SkillLineAbility row is
+#                     gated to a class list that predates class 10.
+#
+#                     Night Elf: 21009 Elusiveness (ClassMask 1085). Blood Elf: 25046 Arcane
+#                     Torrent, the ENERGY variant (ClassMask 8, Rogue only, because in
+#                     3.3.5a the Rogue was the only Blood Elf class on energy).
+#
+#                     Every other elf racial carries ClassMask 0 and already reaches a Demon
+#                     Hunter without help: Nature Resistance, Quickness, Wisp Spirit and
+#                     Shadowmeld for Night Elves, Magic Resistance and Arcane Affinity for
+#                     Blood Elves.
+#
+#                     A bool and not a level, because the level is not a decision: the
+#                     generated playercreateinfo_action rows put a Blood Elf's Arcane Torrent
+#                     on button 2 of the starting bar, so anything other than "from creation"
+#                     ships a character whose action bar has a hole in it.
+#        Default:     1 (enabled)
+#
+
+DemonHunter.GrantRacials = 1
+
+#

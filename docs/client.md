@@ -259,8 +259,29 @@ first, then letters A–Z**, later files overriding earlier ones. Retail ships `
 Locale-specific overrides (interface, DBC, sound) go in `Data/enUS/patch-enUS-N.MPQ`; global assets
 (models, textures, maps) go in `Data/`.
 
-There is no client-side signature check on `patch-*.MPQ`, which is exactly why this works — but see
-the DBC caveat below.
+There is no client-side signature check on the **archive** — `SFileVerifyArchive` returns
+`ERROR_NO_SIGNATURE` on every Blizzard archive in this install, so an unsigned custom `patch-*.MPQ`
+is entirely normal. That is why this works at all, and it is why the Death Knight patch needs
+nothing more than a file in `Data/`.
+
+**But there is a signature check on some of the CONTENT, and this page used to say there was only
+one of them.** The client RSA-verifies two file trees, not one:
+
+| tree | check site in `Wow.exe` | covers |
+|---|---|---|
+| `Interface\FrameXML\` | `0x0052abd9` | `FrameXML.toc` and everything it loads, including `Constants.lua` and `Bindings.xml` |
+| `Interface\GlueXML\` | `0x004da7e5` | `GlueXML.toc` and everything it loads, including `CharacterCreate.lua`, `CharacterCreate.xml` and `GlueStrings.lua` |
+
+Failure is **not** a warning. The TOC path is pushed exactly twice in the whole binary — once to
+verify, once to load — and the load is reachable only from the success branch, so a modified file
+means that entire UI tree never loads. Measured, not inferred: a stock client given one edited
+`GlueStrings.lua` logs `GlueXML is modified or corrupt`, never creates a D3D9 swapchain, and never
+reaches the login screen.
+
+Practical rule: **`DBFilesClient\*`, `Interface\Icons\*` and the class-icon atlases are outside both
+trees and ship freely.** Anything inside `Interface\FrameXML\` or `Interface\GlueXML\` additionally
+needs `client/tools/patch-wow-exe.py`. See [demon-hunters.md](demon-hunters.md) §2 for the
+disassembly, the measurement and the twelve-byte patch.
 
 ### ChromieCraft's HD pack
 
@@ -498,7 +519,7 @@ has been gearing itself or is still in greens.
 | Addon Control Panel (ACP) | Enable/disable addons **without logging out**. Install this first; it saves the most time during setup. | [locus313/…/ACP](https://github.com/locus313/WoW-3.3.5a-Addons/tree/main/ACP) |
 | BugSack + BugGrabber | Collects Lua errors instead of throwing popups. | [NoM0Re zip](https://github.com/NoM0Re/WoW-3.3.5a-Addons/raw/main/src/Addons/BugSack.zip) |
 | GTFO | Audio alert when you're standing in fire, v2.5.3. | [locus313/…/GTFO](https://github.com/locus313/WoW-3.3.5a-Addons/tree/main/GTFO) |
-| Talented | Sane talent UI — you'll be respeccing a lot across phase flips. | [bkader/Talented_WoTLK](https://github.com/bkader/Talented_WoTLK) |
+| ~~Talented~~ | **Shipped, then removed 2026-08-16.** It does not restyle the talent UI, it takes it: `Talented.lua:258-259` `RawHook`s both `ToggleTalentFrame` and `ToggleGlyphFrame` and never chains, so the stock `PlayerTalentFrame` and `Blizzard_GlyphUI` are unreachable rather than reskinned. It would also have been wrong at the phase-3 cap — `Options.lua:4` hardcodes `max_talent_points = 71`, and `Rate.Talent = 1.4` yields 85 points at cap 70 and 99 at cap 80. We ship the stock calculator. | [bkader/Talented_WoTLK](https://github.com/bkader/Talented_WoTLK) |
 | SharedMedia | Fonts/textures/sounds other addons pull from. Dependency for several of the above. | [bkader/SharedMedia](https://github.com/bkader/SharedMedia) |
 | KPack | ~40 small addons collapsed into one, if you'd rather not manage 40 folders. | [bkader/KPack](https://github.com/bkader/KPack) |
 

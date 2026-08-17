@@ -112,12 +112,16 @@ import sys
 import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# dbclib / dbc_tables / mpqlib used to live next to this file. They moved to build/tools/acdbc
+# when the Demon Hunter feature arrived, because both classes have to write into the one
+# patch-Z.MPQ and therefore have to share the libraries that build it -- see acdbc/__init__.py.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tools"))
 
-import dbc_tables                                             # noqa: E402
 import dk_spec as spec                                        # noqa: E402
-import mpqlib                                                 # noqa: E402
-from dbc_tables import (KIND_FLOAT, KIND_STRING)              # noqa: E402
-from dbclib import Dbc                                        # noqa: E402
+from acdbc import dbc_tables, mpqlib                          # noqa: E402
+from acdbc.dbc_tables import (KIND_FLOAT, KIND_STRING)        # noqa: E402
+from acdbc.dbclib import Dbc                                  # noqa: E402
 
 
 # ==========================================================================================
@@ -319,9 +323,9 @@ class Plan:
         # rank 1's RuneCostID gives every custom rank the stock rune cost.
         self.rune_costs = _read_spell_rune_costs(os.path.join(dbc_in, "SpellRuneCost.dbc"))
 
-        self.sql_rows = {t.sql_table: {} for t in dbc_tables.ALL_TABLES}
-        self.client_only_ids = {t.sql_table: set() for t in dbc_tables.ALL_TABLES}
-        self.touched_ids = {t.sql_table: set() for t in dbc_tables.ALL_TABLES}
+        self.sql_rows = {t.sql_table: {} for t in spec.DBC_TABLES}
+        self.client_only_ids = {t.sql_table: set() for t in spec.DBC_TABLES}
+        self.touched_ids = {t.sql_table: set() for t in spec.DBC_TABLES}
 
         self._build_spells()
         self._build_sla()
@@ -1223,7 +1227,7 @@ def parse_emitted_sql(path):
 
 def check_column_counts(checks):
     """#7 -- the SQL column count must equal strlen(format string), exactly, for every table."""
-    for t in dbc_tables.ALL_TABLES:
+    for t in spec.DBC_TABLES:
         checks.expect(len(t.columns) == len(t.fmt), "#7",
                       f"{t.sql_table}: {len(t.columns)} columns == strlen(format) "
                       f"{len(t.fmt)}")
@@ -1231,7 +1235,7 @@ def check_column_counts(checks):
 
 def check_schema_against_db(db, checks):
     """#7 (live half) -- the frozen shape in dbc_tables.py still matches information_schema."""
-    for t in dbc_tables.ALL_TABLES:
+    for t in spec.DBC_TABLES:
         rows = db.query(
             "SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS "
             f"WHERE TABLE_SCHEMA = '{db.schema}' AND TABLE_NAME = '{t.sql_table}' "
@@ -1274,7 +1278,7 @@ def check_value_ranges(sql_paths, db, checks):
     """
     maxlen = {}
     if db is not None and db.live():
-        for t in dbc_tables.ALL_TABLES:
+        for t in spec.DBC_TABLES:
             for name, n in db.query(
                     "SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH "
                     "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = "
@@ -1287,9 +1291,9 @@ def check_value_ranges(sql_paths, db, checks):
     problems = []
     for path in sql_paths:
         for kind, table, payload in parse_emitted_sql(path):
-            if kind != "insert" or table not in dbc_tables.BY_SQL_NAME:
+            if kind != "insert" or table not in spec.DBC_BY_SQL_NAME:
                 continue
-            t = dbc_tables.BY_SQL_NAME[table]
+            t = spec.DBC_BY_SQL_NAME[table]
             for i, name in enumerate(t.columns):
                 v = payload[name]
                 k = t.kind(i)
@@ -1790,13 +1794,13 @@ def check_sql_matches_dbc(sql_paths, dbcs, plan, checks):
     parsed = {}
     for path in sql_paths:
         for kind, table, payload in parse_emitted_sql(path):
-            if kind == "insert" and table in dbc_tables.BY_SQL_NAME:
+            if kind == "insert" and table in spec.DBC_BY_SQL_NAME:
                 parsed.setdefault(table, {})
-                key = payload[dbc_tables.BY_SQL_NAME[table].columns[
-                    dbc_tables.BY_SQL_NAME[table].index_column()]]
+                key = payload[spec.DBC_BY_SQL_NAME[table].columns[
+                    spec.DBC_BY_SQL_NAME[table].index_column()]]
                 parsed[table][key] = payload
 
-    for t in dbc_tables.ALL_TABLES:
+    for t in spec.DBC_TABLES:
         rows = parsed.get(t.sql_table, {})
         dbc = dbcs.get(t.sql_table)
         if dbc is None:
@@ -2163,29 +2167,48 @@ def do_emit(args, checks):
         print(f"   {dbc.table.dbc_file:24s} {os.path.getsize(p):>10,} bytes  "
               f"{len(dbc.records):>6,} records")
 
+    # --no-mpq: write the DBCs and stop.
+    #
+    # THERE IS ONLY ONE ARCHIVE. MPQ resolution is whole-file per archived path by archive
+    # priority, so two archives cannot both supply Spell.dbc -- the higher-priority one wins
+    # outright and the other's records simply are not there. patch-Z is already the top of the
+    # chain, so a second feature cannot be given a second slot either. When the Demon Hunter
+    # arrived, that made "each generator builds its own archive" impossible: whichever ran
+    # second would silently delete the other class.
+    #
+    # So the two CHAIN, and this flag is the handoff. dhspells.py reads <out>/dbc rather than
+    # /srv/wow/data/dbc, appends its own records to these same three files, adds ten more DBCs
+    # and the UI overrides, and builds the archive from the union.
+    # scripts/build-client-patch.sh runs the pair in order and is the documented way to do it.
     mpq_path = os.path.join(args.out, os.path.basename(spec.MPQ_SLOTS[args.slot]))
+    if args.no_mpq:
+        print(f"   archive skipped (--no-mpq); dhspells.py will build "
+              f"{os.path.basename(mpq_path)} from these")
+        mpq_path = None
     entries = [(dbc_paths[t.sql_table], "DBFilesClient\\" + t.dbc_file)
-               for t in dbc_tables.ALL_TABLES]
-    read_back = mpqlib.write_patch(mpq_path, entries)
-    print(f"   {os.path.basename(mpq_path):24s} {os.path.getsize(mpq_path):>10,} bytes  "
-          f"{len(entries)} files")
+               for t in spec.DBC_TABLES]
+    read_back = mpqlib.write_patch(mpq_path, entries) if mpq_path else []
+    if mpq_path:
+        print(f"   {os.path.basename(mpq_path):24s} {os.path.getsize(mpq_path):>10,} bytes  "
+              f"{len(entries)} files")
     for name, blob in read_back:
-        local = dbc_paths[next(t.sql_table for t in dbc_tables.ALL_TABLES
+        local = dbc_paths[next(t.sql_table for t in spec.DBC_TABLES
                                if name.endswith(t.dbc_file))]
         checks.expect(hashlib.sha256(blob).hexdigest() == sha256_file(local), "#10",
                       f"{name} reads back out of the archive sha256-identical")
-    header_size, fmt_version = mpqlib.header_info(mpq_path)
-    checks.ok("#10", f"{os.path.basename(mpq_path)} is MPQ v2 (headerSize {header_size}, "
-                     f"formatVersion {fmt_version}), unsigned, no (attributes)")
+    if mpq_path:
+        header_size, fmt_version = mpqlib.header_info(mpq_path)
+        checks.ok("#10", f"{os.path.basename(mpq_path)} is MPQ v2 (headerSize {header_size}, "
+                         f"formatVersion {fmt_version}), unsigned, no (attributes)")
 
-    if args.mpq:
+    if args.mpq and mpq_path:
         os.makedirs(os.path.dirname(os.path.abspath(args.mpq)), exist_ok=True)
         with open(mpq_path, "rb") as s, open(args.mpq, "wb") as d:
             d.write(s.read())
         print(f"   installed -> {args.mpq}")
 
     print("\n== invariants (emitted artefacts, read back off disk)")
-    dbcs = {t.sql_table: Dbc(t, dbc_paths[t.sql_table]) for t in dbc_tables.ALL_TABLES}
+    dbcs = {t.sql_table: Dbc(t, dbc_paths[t.sql_table]) for t in spec.DBC_TABLES}
     check_sql_matches_dbc(sql_paths, dbcs, plan, checks)
     check_reapplyable(sql_paths, checks)
     check_value_ranges(sql_paths, db, checks)
@@ -2195,7 +2218,8 @@ def do_emit(args, checks):
 
     manifest, json_path, sums_path = write_manifest(
         args.out, [("sql", p) for p in sql_paths] + [("header", header_path)]
-        + [("dbc", p) for p in dbc_paths.values()] + [("mpq", mpq_path)])
+        + [("dbc", p) for p in dbc_paths.values()]
+        + ([("mpq", mpq_path)] if mpq_path else []))
     print(f"\n== manifest -> {os.path.relpath(json_path, spec.REPO_ROOT)}, "
           f"{os.path.relpath(sums_path, spec.REPO_ROOT)}")
     for e in manifest["outputs"]:
@@ -2282,7 +2306,7 @@ def do_check(args, checks):
     #     49 MB binary ever entering the repository.
     # The plan is rebuilt either way, because #2/#3/#5/#6 need the patched records.
     emitted = {t.sql_table: os.path.join(args.out, "dbc", t.dbc_file)
-               for t in dbc_tables.ALL_TABLES}
+               for t in spec.DBC_TABLES}
     have_emitted = all(os.path.exists(p) for p in emitted.values())
     have_stock = os.path.isdir(args.dbc_in)
 
@@ -2317,7 +2341,7 @@ def do_check(args, checks):
 
     if have_emitted:
         print(f"\n== SQL vs the emitted DBCs in {os.path.relpath(args.out, spec.REPO_ROOT)}")
-        dbcs = {t.sql_table: Dbc(t, emitted[t.sql_table]) for t in dbc_tables.ALL_TABLES}
+        dbcs = {t.sql_table: Dbc(t, emitted[t.sql_table]) for t in spec.DBC_TABLES}
     else:
         print("\n== SQL vs the rebuilt DBCs (no build artefacts present)")
         dbcs = {"spell_dbc": plan.spell, "skilllineability_dbc": plan.sla,
@@ -2354,7 +2378,7 @@ def do_verify(args, checks):
         print(f"  0x{prio:02x}  {rel}")
     print()
     want = os.path.basename(spec.MPQ_SLOTS[args.slot])
-    for t in dbc_tables.ALL_TABLES:
+    for t in spec.DBC_TABLES:
         name = "DBFilesClient\\" + t.dbc_file
         prio, rel = mpqlib.resolve(data, name)
         if rel is None:
@@ -2382,6 +2406,10 @@ def main(argv=None):
     ap.add_argument("--mpq", default=None,
                     help="also install the finished archive here, e.g. "
                          "<client>/Data/patch-Z.MPQ")
+    ap.add_argument("--no-mpq", action="store_true",
+                    help="write the patched DBCs but build no archive -- the handoff to "
+                         "dhspells.py, which owns the one archive. See the comment at the "
+                         "mpq_path assignment.")
     ap.add_argument("--slot", default=spec.DEFAULT_MPQ_SLOT, choices=sorted(spec.MPQ_SLOTS),
                     help="client archive slot [Z]")
     ap.add_argument("--client-data", default=spec.DEFAULT_CLIENT_DATA,

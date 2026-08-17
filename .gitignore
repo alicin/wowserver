@@ -21,3 +21,8 @@ build/cache/
 
 # local scratch: core source clone, dbc workspace
 .work/
+
+# Python bytecode. Never useful in a diff, and the DBC tooling under build/tools is
+# imported by three different generators, so it accumulates fast.
+__pycache__/
+*.pyc

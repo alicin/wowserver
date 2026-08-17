@@ -1000,10 +1000,10 @@ Rate.Drop.Item.Legendary = 3
 Rate.Drop.Item.Artifact  = 3
 Rate.Drop.Money          = 3
 
-# LEFT AT 1. These are a different mechanism — see below.
+# COUNT multipliers, a different mechanism from the seven above — see "The count multipliers".
 Rate.Drop.Item.Referenced       = 1
-Rate.Drop.Item.ReferencedAmount = 1
-Rate.Drop.Item.GroupAmount      = 1
+Rate.Drop.Item.ReferencedAmount = 3
+Rate.Drop.Item.GroupAmount      = 3
 ```
 
 Those seven quality keys are the complete tier list — `Poor` through `Artifact`, matching
@@ -1047,14 +1047,52 @@ drops are guaranteed. **So this 3× is a trash-and-world-drop multiplier.** Conc
 | The item a boss picks from its loot group | **nothing** | grouped, raw chance |
 | Gold from any source | 3× | `Rate.Drop.Money` is applied to the rolled amount, not a chance |
 
-If a real "bosses drop more" is ever wanted, the keys for it are `Rate.Drop.Item.GroupAmount` and
-`Rate.Drop.Item.ReferencedAmount` — upstream describes them as *"Makes many dungeon bosses (and
+#### The count multipliers — and they are now on
+
+The section above used to end by saying that a real "bosses drop more" would need
+`Rate.Drop.Item.GroupAmount` and `Rate.Drop.Item.ReferencedAmount`, and that they were left at `1`
+because tripling every boss's loot pile was a bigger change than had been asked for. **That change
+has since been asked for and taken.** Both are at `3`.
+
+They multiply *counts*, not chances. Upstream describes them as *"Makes many dungeon bosses (and
 others) drop additional loot"* and *"Makes many raid bosses (and others) drop additional loot"*.
-They multiply *counts*, not chances, and `GroupAmount` is read into a `uint32`, so it truncates and
-only integer values do anything. They are left at `1` deliberately: tripling every boss's loot pile
-is a much larger change than "3× loot" and it is not what was asked for. `Rate.Drop.Item.Referenced`
-is left at `1` for the same reason — it is a chance multiplier on whole reference *tables* firing,
-not a quality tier.
+Both are read into a `uint32`, so they truncate — only whole numbers do anything, and `1.5` is `1`.
+
+`GroupAmount` becomes the number of times each top-level loot group is rolled.
+`LootTemplate::LootGroup::Process` recurses on it:
+
+```cpp
+loot.AddItem(*item);
+if (nonRefIterationsLeft > 1 && !item->needs_quest)
+    this->Process(loot, player, store, lootMode, nonRefIterationsLeft - 1);
+```
+
+`ReferencedAmount` multiplies the reference loop count — `uint32(item->maxcount * rate)` — and it
+is the one that matters for bosses, because raid and dungeon tables are largely reference-driven.
+`GroupAmount` on its own would leave most boss loot untripled.
+
+`Rate.Drop.Item.Referenced` stays at `1`: it is a chance multiplier on whole reference *tables*
+firing, and chance is already covered by the seven quality keys.
+
+**Two exemptions the core gives us for free**, both visible in the snippet above:
+
+* **Quest items.** The recursion is guarded by `&& !item->needs_quest`, so "collect 10 pelts" still
+  drops at the normal rate and quest pacing is unchanged.
+* **Nested groups.** A group reached *through* a reference is processed with `isTopLevel = false`
+  and multiplies by `0`, so this is 3×, not 3×-per-level-of-nesting.
+
+**What it also hits, which is broader than "mobs and bosses".** `GroupAmount` applies at the top
+level of every loot store that allows rates. That is 3× on gameobject chests, fishing, skinning and
+pickpocketing — and on **disenchant, milling and prospecting**, which is a 3× on the enchanting and
+jewelcrafting mat supply. That last one is an economy change rather than a loot change, and it was
+left in deliberately: on a three-friend realm thin mat supply is the bigger problem.
+
+To scope it to creatures only, the levers are the `OnAfterCalculateLootGroupAmount` and
+`OnAfterRefCount` script hooks, both of which take the `LootStore` and can compare it against
+`LootTemplates_Creature`. That is a module, not a config key.
+
+**Ceiling.** `MAX_NR_LOOT_ITEMS` is 18 (`LootMgr.h:51`). A table that already fills six or more
+slots will clip rather than triple. Nothing errors; the surplus is silently dropped.
 
 Nothing in the pinned module set overrides this. `mod-aoe-loot`, `mod-quest-loot-party` and
 `mod-junk-to-gold` were grepped for `RATE_DROP` / `Rate.Drop` / `OnItemRoll`: no hits. The one

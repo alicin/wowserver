@@ -31,31 +31,41 @@ A real item tooltip -- stats, sockets, set bonuses, procs, use effects, flavour 
 addon cannot fake it and should not try; the shipped database has the name, the icon and six
 numbers, and that is all it will ever have.
 
-On a 3.3.5a client that data arrives from the server on demand. Touching GetItemInfo() for an
-item the client has never seen returns nil AND makes the client send CMSG_ITEM_QUERY_SINGLE;
-the SMSG_ITEM_QUERY_SINGLE_RESPONSE lands a moment later and goes into itemcache.wdb, and from
-then on the client can draw that item forever, across sessions. So there are three parts:
+On a 3.3.5a client that data arrives from the server on demand, and WHICH LUA CALL ASKS FOR IT
+IS THE ENTIRE TRICK. This file used to say that touching GetItemInfo() sent
+CMSG_ITEM_QUERY_SINGLE. IT DOES NOT, and believing it cost this addon its tooltips.
 
-  1. PREFETCH. Every time the list is re-filled, the ids now on screen are queued. A few
-     queries per PREFETCH_INTERVAL are issued from that queue -- rate limited, and each id
-     asked at most once per session -- so an item you have merely scrolled past is usually
-     already cached by the time you hover it.
+GetItemInfo is a PURE CACHE READ. In this client's own Wow.exe, Script_GetItemInfo (0x516c60)
+calls the item-record-cache getter (0x67ca30) with a NULL completion callback, and that
+getter's contract is: cache miss + NULL callback => return nothing and send nothing. The same
+getter with a NON-null callback is what allocates a pending record and puts opcode 0x56 --
+CMSG_ITEM_QUERY_SINGLE -- on the wire, and the only Lua entry point that reaches it that way is
+a tooltip SetHyperlink. So: SetHyperlink asks, GetItemInfo checks. Both are needed, in that
+order, and the old code had exactly one of them behind the other. Three parts:
+
+  1. PREFETCH. Every time the list is re-filled, the ids now on screen are pushed to the FRONT
+     of a queue; a few per PREFETCH_INTERVAL are handed to AskServer(), which issues the
+     SetHyperlink on a private hidden tooltip. Rate limited, and an id is re-asked at most once
+     per PREFETCH_RETRY seconds -- so an item you merely scrolled past is usually already
+     cached by the time you hover it, and a reply lost to a loading screen is not lost forever.
   2. HOVER. GameTooltip:SetHyperlink(link) once GetItemInfo() has an answer: the genuine
      tooltip, identical to hovering the item in a bag, plus our own id/category footer.
   3. WAIT. Otherwise draw a summary from the shipped database, mark it with the client's own
-     RETRIEVING_ITEM_INFO string, and keep polling GetItemInfo for TOOLTIP_WAIT seconds. The
-     instant it resolves, the tooltip is replaced in place under the still-hovering cursor.
+     RETRIEVING_ITEM_INFO string, and every TOOLTIP_POLL seconds re-ask and re-check for
+     TOOLTIP_WAIT seconds. The instant it resolves, the tooltip is replaced in place under the
+     still-hovering cursor.
 
-WHY THE GATE IS GetItemInfo AND NOT SetHyperlink ITSELF. SetHyperlink("item:49623") on an
-uncached item does not fail: it draws a one-line tooltip that says "Retrieving item
-information", which looks like a bug and tells you nothing. GetItemInfo returning a name is
-the only reliable "the client has this item" test available in 3.3.5, so it decides which of
-the two tooltips gets drawn. RealTooltip additionally checks that the tooltip came out with
-more than one line, because a cache entry can exist and still be useless.
+WHY GetItemInfo IS STILL THE GATE FOR DRAWING. SetHyperlink("item:49623") on an uncached item
+does not fail: it draws a one-line "Retrieving item information", which looks like a bug and
+tells you nothing. GetItemInfo returning a name is the only reliable "the client has this item
+now" test available in 3.3.5, so it decides which of the two tooltips gets drawn. RealTooltip
+additionally checks the tooltip came out with more than one line, because a cache entry can
+exist and still be useless -- and DrawTooltip repaints the summary when it does, so a failed
+attempt never leaves an empty frame under the cursor.
 
 Polling is not laziness: 3.3.5 has no event for this. GET_ITEM_INFO_RECEIVED does not exist
-until Mists, and there is no callback form of GetItemInfo. Polling one id per frame for six
-seconds is the whole available API.
+until Cataclysm, and there is no callback form of GetItemInfo. Re-asking a few times a second
+for six seconds is the whole available API.
 
 FAILURE MODES.
   * The server never answers -- mid-loading-screen, dropped reply, an id the server's
@@ -77,8 +87,11 @@ local SEARCH_DELAY = 0.20    -- seconds of no typing before the search is starte
 local SCAN_BUDGET = 6000     -- rows of filtering per frame; ~2-3 ms, see Search.lua
 local IDLE_BUDGET = 3000     -- rows of lowercase-index priming per idle frame
 local TOOLTIP_WAIT = 6       -- seconds to keep waiting for the server's item data
+local TOOLTIP_POLL = 0.25    -- seconds between re-asks while waiting; see ItemBrowser_OnUpdate
 local PREFETCH_INTERVAL = 0.2
 local PREFETCH_PER_TICK = 4  -- => at most 20 item queries a second while scrolling
+local PREFETCH_RETRY = 30    -- seconds before an unanswered id may be asked for again
+local RELAYOUT_TRIES = 10    -- frames to keep re-measuring the panes after a show
 local MAX_QUANTITY = 1000
 local MIN_WIDTH, MIN_HEIGHT = 780, 520
 local MAX_WIDTH, MAX_HEIGHT = 1800, 1400
@@ -94,6 +107,8 @@ local updating = false       -- re-entrancy guard: FauxScrollFrame_Update can re
 local settingFilters = false -- suppress change handlers while widgets are refilled
 local selectedEntry = nil
 local pendingTooltip = nil   -- { row, entry, expires }
+local sinceTooltipPoll = 0   -- throttles the re-ask/redraw while pendingTooltip is set
+local relayoutTicks = 0      -- frames left to re-measure the panes after a show; see OnShow
 local pendingGive = nil      -- captured before the confirmation popup, used after it
 
 local prefetchQueue, prefetchSeen, sincePrefetch = {}, {}, 0
@@ -567,13 +582,54 @@ end
 -- results list
 -- =========================================================================================
 
+--- Ask the SERVER for an item the client does not have.
+--
+-- THIS FUNCTION IS THE BUG FIX. The original design assumed that touching GetItemInfo() was
+-- itself the request -- it says so at the top of this file, and it is wrong. On 3.3.5a
+-- GetItemInfo is a PURE CACHE READ. Disassembled from this client's own Wow.exe:
+-- Script_GetItemInfo (0x516c60) calls the item-record-cache getter (0x67ca30) with a NULL
+-- completion callback, and that getter's contract is "cache miss + NULL callback => return
+-- nothing, send nothing". The very same getter with a NON-null callback is what allocates a
+-- pending record and puts opcode 0x56 (CMSG_ITEM_QUERY_SINGLE) on the wire, and the only Lua
+-- entry point that reaches it that way is a tooltip SetHyperlink.
+--
+-- So the old code could never work: RealTooltip gated SetHyperlink -- the request -- behind
+-- GetItemInfo -- the cache read. Cached items drew fine; everything else waited forever for a
+-- packet nobody had sent, and the prefetch loop drained thousands of ids without emitting one.
+--
+-- The request goes through a private, never-shown tooltip rather than GameTooltip, because
+-- other addons on this realm hook GameTooltip:SetHyperlink (Auctionator does) and 20 warm-up
+-- calls a second have no business running their handlers.
+local scanTip
+local function AskServer(entry)
+    -- Free, now that we know what it is: a pure cache read. It keeps the ~1% of ids that are
+    -- already cached from paying for a full tooltip build 20 times a second while scrolling.
+    if GetItemInfo(entry) then return end
+    if not scanTip then
+        scanTip = CreateFrame("GameTooltip", "ItemBrowserScanTooltip", nil, "GameTooltipTemplate")
+    end
+    -- ANCHOR_NONE on WorldFrame: owned (SetHyperlink needs an owner) but never positioned over
+    -- anything and never shown.
+    scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+    scanTip:ClearLines()
+    scanTip:SetHyperlink("item:" .. entry)
+end
+
 --- Ask the client for an item it may not have. Cheap and idempotent from our side: the id is
 -- remembered so it is only ever queried once, and the queue is drained a few at a time so
 -- flicking the scroll wheel down 46,000 rows cannot turn into 46,000 packets in one frame.
 local function Prefetch(entry)
-    if prefetchSeen[entry] then return end
-    prefetchSeen[entry] = true
-    prefetchQueue[#prefetchQueue + 1] = entry
+    -- A TIMESTAMP, not a boolean, and the guard compares against it. A plain `seen` flag meant
+    -- one attempt per id per session: a request issued during a loading screen, or a reply
+    -- dropped on the way back, was never retried for as long as the client stayed up.
+    local asked = prefetchSeen[entry]
+    if asked and (GetTime() - asked) < PREFETCH_RETRY then return end
+    prefetchSeen[entry] = GetTime()
+    -- FRONT of the queue, not the back. The drain is 20 ids a second and every redraw enqueues
+    -- another page, so on the unfiltered 46,098-row list a back-of-queue id you scrolled to
+    -- after a minute would wait another minute for its turn. What is under the cursor now is
+    -- what the user is about to hover, so it goes first.
+    table.insert(prefetchQueue, 1, entry)
 end
 
 local function DrainPrefetch()
@@ -581,9 +637,10 @@ local function DrainPrefetch()
     if n == 0 then return end
     local take = n > PREFETCH_PER_TICK and PREFETCH_PER_TICK or n
     for i = 1, take do
-        -- The call IS the request. GetItemInfo on an unknown id returns nil and sends
-        -- CMSG_ITEM_QUERY_SINGLE; the return value is genuinely not wanted here.
-        GetItemInfo(prefetchQueue[i])
+        -- AskServer, not GetItemInfo. GetItemInfo only reads itemcache.wdb and sends nothing
+        -- -- see the long note on AskServer. This loop used to be a no-op that drained
+        -- thousands of ids per session without a single packet leaving the client.
+        AskServer(prefetchQueue[i])
     end
     for i = 1, n - take do
         prefetchQueue[i] = prefetchQueue[i + take]
@@ -901,10 +958,9 @@ end
 
 --- Try to draw the client's own tooltip. Returns false if the client does not have the item.
 local function RealTooltip(index, entry)
-    -- Touching GetItemInfo is what makes the client ask the server for this item, so this
-    -- call is doing real work even on the branch where it returns nil. Its NAME is the gate:
-    -- a name back means this id is in itemcache.wdb and every other field, including the
-    -- link, is therefore available too.
+    -- The NAME is the gate: a name back means this id is in itemcache.wdb and every other
+    -- field, including the link, is therefore available too. It no longer doubles as the
+    -- request -- AskServer does that.
     local name, link = GetItemInfo(entry)
     if not name then return false end
     -- The link carries the item's default suffix and enchant fields; "item:<id>" alone is
@@ -930,6 +986,20 @@ local function RealTooltip(index, entry)
     return true
 end
 
+--- Draw the best tooltip available for this row, and say whether it was the real one.
+--
+-- Every caller must go through here rather than calling RealTooltip directly. RealTooltip can
+-- fail AFTER SetHyperlink has already wiped the tooltip (the NumLines guard), which used to
+-- leave an empty frame hanging under the cursor on the poll path -- nothing redrew the
+-- fallback. Redrawing it here means there is always something on screen.
+local function DrawTooltip(index, entry)
+    if RealTooltip(index, entry) then return true end
+    GameTooltip:ClearLines()
+    FallbackTooltip(index, entry)
+    GameTooltip:Show()
+    return false
+end
+
 function ItemBrowser_RowEnter(row)
     local index = row.index
     if not index then return end
@@ -938,11 +1008,12 @@ function ItemBrowser_RowEnter(row)
     GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
     GameTooltip:ClearLines()
 
-    if RealTooltip(index, entry) then
+    if DrawTooltip(index, entry) then
         pendingTooltip = nil
     else
-        FallbackTooltip(index, entry)
-        GameTooltip:Show()
+        -- Hovering is itself a request. The prefetch queue may not have reached this id yet,
+        -- and on a cold list it almost certainly has not.
+        AskServer(entry)
         pendingTooltip = { row = row, index = index, entry = entry,
                            expires = GetTime() + TOOLTIP_WAIT }
     end
@@ -1189,15 +1260,24 @@ end
 
 --- Resizing changes how many rows fit, and nothing else. Both lists recompute their pool and
 --- redraw; the filter bar is anchored, so it looks after itself.
+--- Returns true only when BOTH panes got a plausible measurement. See the long note on
+--- ItemBrowserTree_Resized: the results list has the identical pre-layout defect and was
+--- identically stuck at MIN_ROWS = 4 on first open. Nobody reported it because the four rows
+--- of a 46,000-row list still look like a list, whereas four categories in a tall empty
+--- sidebar look broken.
 function ItemBrowser_OnSizeChanged(frame)
     local scroll = Widget("ListScroll")
-    if not scroll then return end             -- fires once before the children exist
+    if not scroll then return false end       -- fires once before the children exist
     local fit = math.floor((scroll:GetHeight() or 0) / ROW_HEIGHT)
-    if fit ~= visibleRows then
+    local listOk = fit >= 1
+    if listOk and fit ~= visibleRows then
         EnsureRows(fit)
         ItemBrowser_UpdateList()
     end
-    ItemBrowserTree_Resized()
+    -- Deliberately not short-circuited: the tree must be given its chance even on a frame
+    -- where the list measured badly, and vice versa.
+    local treeOk = ItemBrowserTree_Resized()
+    return listOk and treeOk
 end
 
 function ItemBrowser_Toggle()
@@ -1316,7 +1396,13 @@ function ItemBrowser_OnShow(frame)
     -- yesterday's result list is not necessarily today's.
     searchDirty = true
     sinceType = SEARCH_DELAY
-    ItemBrowser_OnSizeChanged(frame)
+    -- Try now, and if the window has not been laid out yet, keep trying on the next few
+    -- frames. OnShow runs before the layout pass, so this first attempt frequently measures
+    -- nothing; OnUpdate runs after it, so one of the retries always lands. Bounded, so a
+    -- genuinely zero-height window cannot spin forever.
+    if not ItemBrowser_OnSizeChanged(frame) then
+        relayoutTicks = RELAYOUT_TRIES
+    end
 end
 
 function ItemBrowser_OnHide()
@@ -1325,6 +1411,16 @@ function ItemBrowser_OnHide()
 end
 
 function ItemBrowser_OnUpdate(frame, elapsed)
+    -- The deferred re-measure from OnShow. Stops the moment both panes report a plausible
+    -- size, so in the normal case this costs one extra recount on the frame after opening.
+    if relayoutTicks > 0 then
+        if ItemBrowser_OnSizeChanged(frame) then
+            relayoutTicks = 0
+        else
+            relayoutTicks = relayoutTicks - 1
+        end
+    end
+
     if scanning then
         if S:Step(SCAN_BUDGET) then
             ItemBrowser_FinishSearch()
@@ -1351,8 +1447,19 @@ function ItemBrowser_OnUpdate(frame, elapsed)
     if pendingTooltip then
         if GetTime() > pendingTooltip.expires or not GameTooltip:IsOwned(pendingTooltip.row) then
             pendingTooltip = nil
-        elseif RealTooltip(pendingTooltip.index, pendingTooltip.entry) then
-            pendingTooltip = nil
+        else
+            -- THROTTLED, not per-frame. Each attempt re-asks the server and, on a miss,
+            -- rebuilds two tooltips (the scan one and the fallback). At 60 fps for six
+            -- seconds that would be 360 rounds of that for one hovered row; four a second is
+            -- indistinguishable to a human and costs 1/15th as much.
+            sinceTooltipPoll = sinceTooltipPoll + elapsed
+            if sinceTooltipPoll >= TOOLTIP_POLL then
+                sinceTooltipPoll = 0
+                AskServer(pendingTooltip.entry)
+                if DrawTooltip(pendingTooltip.index, pendingTooltip.entry) then
+                    pendingTooltip = nil
+                end
+            end
         end
     end
 end

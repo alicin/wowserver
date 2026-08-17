@@ -232,14 +232,34 @@ function ItemBrowserTree_Refresh()
     ItemBrowserTree_Update()
 end
 
+--- Recompute how many node buttons fit. Returns true only if the measurement was PLAUSIBLE,
+--- which is what lets the caller keep retrying until the frame has actually been laid out.
+---
+--- THE BUG THIS GUARD FIXES. A frame's GetHeight() is not meaningful until the client has run
+--- a layout pass over it, and both callers of this function historically ran before that: once
+--- at ADDON_LOADED and once from OnShow. A pre-layout read yields a height of 0, floor(0/20)
+--- gives 0, and EnsureButtons then CLAMPED that up to MIN_NODES and set visibleNodes = 4. From
+--- then on the pool held four buttons, `fit ~= visibleNodes` was the only thing that could
+--- trigger a rebuild, and nothing ever re-measured -- so the sidebar showed exactly four
+--- categories over a pane with room for seventeen, and the rest was bare backdrop. It came
+--- right only when something else forced a recount, which is why it "fixed itself after a
+--- while".
+---
+--- No legal window size produces four: the 520px minimum fits 8, the 700px default 17, the
+--- 1400px maximum 52. Four could only ever have been the clamp.
 function ItemBrowserTree_Resized()
     local scroll = _G["ItemBrowserFrameTreeScroll"]
-    if not scroll then return end
+    if not scroll then return false end
     local fit = math.floor((scroll:GetHeight() or 0) / NODE_HEIGHT)
+    -- Refuse to act on a height that cannot be real. Returning false leaves the pool at
+    -- whatever it was and tells the caller to ask again next frame; the alternative -- clamping
+    -- to MIN_NODES -- is what latched the bug in place.
+    if fit < 1 then return false end
     if fit ~= visibleNodes then
         EnsureButtons(fit)
         ItemBrowserTree_Update()
     end
+    return true
 end
 
 function ItemBrowserTree_OnLoad(self)

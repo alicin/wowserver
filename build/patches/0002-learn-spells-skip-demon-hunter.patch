@@ -1,0 +1,28 @@
+diff --git a/modules/mod-learn-spells/src/mod_learnspells.cpp b/modules/mod-learn-spells/src/mod_learnspells.cpp
+index cd30aad..706a910 100644
+--- a/modules/mod-learn-spells/src/mod_learnspells.cpp
++++ b/modules/mod-learn-spells/src/mod_learnspells.cpp
+@@ -512,6 +512,23 @@ private:
+             return SPELLFAMILY_SHAMAN;
+         case CLASS_WARLOCK:
+             return SPELLFAMILY_WARLOCK;
++        case CLASS_DEMON_HUNTER:
++            // Class 10 is this realm's Demon Hunter (build/patches/0001). It must NOT reach the
++            // default below: SPELLFAMILY_GENERIC is family 0, and the scan in
++            // LearnSpellsForNewLevel filters on `SpellFamilyName != family` with no class-mask
++            // check of any kind -- so a family-0 class is handed every family-0 spell in the
++            // game whose BaseLevel matches and whose SkillLineAbility row has RaceMask 0 and
++            // AcquireMethod 0. Measured on this realm: 15 spells at level 1 alone, including
++            // Parry, four ranks of Intercept, Vampiric Touch and Flash of Light, then 59
++            // Enchanting recipes at 35 and 38 Alchemy recipes at 45.
++            //
++            // 14 and not 16. 16 is the Demon Hunter's OWN family, and returning it would make
++            // this module grant the class's real spells at their BaseLevel -- bypassing
++            // mod-demon-hunter's progression table and handing out the off-hand mirrors and
++            // triggered second records that nobody is ever meant to learn. Family 14 has zero
++            // members across all 49,839 records in Spell.dbc (histogrammed, not assumed), so
++            // the scan matches nothing and this module correctly does nothing for the class.
++            return 14;
+         default:
+             return SPELLFAMILY_GENERIC;
+         }

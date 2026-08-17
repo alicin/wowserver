@@ -51,16 +51,35 @@ KIND_STRING = "s"
 
 
 class DbcTable:
-    """One world-DB `*_dbc` override table and the DBC file it mirrors."""
+    """One world-DB `*_dbc` override table and the DBC file it mirrors.
 
-    def __init__(self, sql_table, dbc_file, fmt, columns, signed):
+    `sql_table` may be None for a file the server does not load at all. Exactly one such file
+    matters here -- `CharBaseInfo.dbc`, the race/class availability matrix, which has no
+    `CharBaseInfofmt` in DBCfmt.h and no reference anywhere in src/. It is client-only, so it
+    ships in the archive and has no SQL half; the server's equivalent gate is which
+    `playercreateinfo` rows exist.
+
+    `strings` names columns that hold a string-block offset but are NOT localized `*_Lang_*`
+    slots, so `kind()` cannot derive it from the name. There are two in the whole toolkit --
+    `ChrClasses.Filename` (the class token, "WARRIOR"/"DEATHKNIGHT", which FrameXML and GlueXML
+    both key `CLASS_ICON_TCOORDS` and `RAID_CLASS_COLORS` on) and `TalentTab.BackgroundFile` --
+    and both have to be written, not just read, so getting them wrong would put an integer where
+    the client expects an offset and print garbage.
+    """
+
+    def __init__(self, sql_table, dbc_file, fmt, columns, signed, strings=()):
         assert len(columns) == len(fmt), (
-            f"{sql_table}: {len(columns)} columns but format string is {len(fmt)} chars")
+            f"{sql_table or dbc_file}: {len(columns)} columns but format string is "
+            f"{len(fmt)} chars")
         self.sql_table = sql_table
         self.dbc_file = dbc_file
         self.fmt = fmt
         self.columns = tuple(columns)
         self.signed = frozenset(signed)
+        self.extra_strings = frozenset(strings)
+        assert self.extra_strings <= set(self.columns), (
+            f"{sql_table or dbc_file}: strings= names a column that does not exist: "
+            f"{sorted(self.extra_strings - set(self.columns))}")
         self.index_of = {n: i for i, n in enumerate(self.columns)}
         assert len(self.index_of) == len(self.columns), f"{sql_table}: duplicate column name"
         # Byte offset of every column inside a DBC record, and the record size the format
@@ -87,6 +106,8 @@ class DbcTable:
             return KIND_FLOAT
         if "_Lang_" in name and not name.endswith("_Mask"):
             return KIND_STRING
+        if name in self.extra_strings:
+            return KIND_STRING
         if c in "bX":
             return KIND_UINT8
         return KIND_INT32 if name in self.signed else KIND_UINT32
@@ -96,11 +117,16 @@ class DbcTable:
 
     def index_column(self):
         """Format index of the `n`/`d` index column. `SELECT * ... ORDER BY ID DESC` and
-        DBCDatabaseLoader's index-table sizing both key on this one."""
+        DBCDatabaseLoader's index-table sizing both key on this one.
+
+        Returns None for a file that has no index column at all. `CharBaseInfo.dbc` is the only
+        one here: it is a flat list of (RaceID, ClassID) byte pairs with no key, which is why
+        the client can only ask "is this pair present", never "give me row N".
+        """
         for i, c in enumerate(self.fmt):
             if c in "nd":
                 return i
-        raise AssertionError(f"{self.sql_table}: format string has no n/d index column")
+        return None
 
     def __len__(self):
         return len(self.columns)
@@ -228,6 +254,112 @@ InventoryType_21 InventoryType_22 InventoryType_23 InventoryType_24
 """.split()
 
 
+# =============================================================================================
+# The tables a NEW PLAYABLE CLASS needs, on top of the three above.
+#
+# Every one of these has a world-DB override table (DBCStores.cpp:284-400 passes a table name
+# alongside every single LOAD_DBC), so the entire server half of a new class is SQL and
+# /srv/wow/data/dbc stays byte-identical to stock -- the same property the Death Knight feature
+# has. Format strings are copied VERBATIM from the pinned core's DBCfmt.h; column names and
+# signedness come from `information_schema` on the live realm. Both are re-asserted at emit
+# time, so a core bump that reshapes one of these fails the generator instead of the boot.
+# =============================================================================================
+
+# ---- chrclasses_dbc : 60 columns (DBCfmt.h:35)
+# Where the class's NAME lives. Not GlobalStrings.lua: `FillLocalizedClassList` is a C function
+# that reads this file, so "Demon Hunter" on the character sheet, in the create-screen class
+# list and in `UnitClass()` all come from column 4 for free. Column 55 `Filename` is the class
+# TOKEN ("WARRIOR", "DEATHKNIGHT") that FrameXML and GlueXML key CLASS_ICON_TCOORDS and
+# RAID_CLASS_COLORS on, and column 59 `Required_Expansion` is checked against the account's
+# expansion at CharacterHandler.cpp:315 -> CHAR_CREATE_EXPANSION_CLASS.
+CHRCLASSES_FMT = "nxixssssssssssssssssxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxixii"
+CHRCLASSES_DBC_COLUMNS = (
+    ["ID", "Field01", "DisplayPower", "PetNameToken"]
+    + [f"Name_Lang_{loc}" for loc in
+       ("enUS enGB koKR frFR deDE enCN zhCN enTW zhTW esES esMX ruRU ptPT ptBR itIT Unk "
+        "Mask").split()]
+    + [f"Name_Female_Lang_{loc}" for loc in
+       ("enUS enGB koKR frFR deDE enCN zhCN enTW zhTW esES esMX ruRU ptPT ptBR itIT Unk "
+        "Mask").split()]
+    + [f"Name_Male_Lang_{loc}" for loc in
+       ("enUS enGB koKR frFR deDE enCN zhCN enTW zhTW esES esMX ruRU ptPT ptBR itIT Unk "
+        "Mask").split()]
+    + ["Filename", "SpellClassSet", "Flags", "CinematicSequenceID", "Required_Expansion"])
+CHRCLASSES_DBC_SIGNED = """
+ID Field01 DisplayPower PetNameToken SpellClassSet Flags CinematicSequenceID Required_Expansion
+""".split()
+
+# ---- skillline_dbc : 56 columns (DBCfmt.h:101)
+# CategoryID 7 is SKILL_CATEGORY_CLASS; a class skill line here is what gives the spellbook a
+# named tab. Stock IDs run 6..788.
+SKILLLINE_FMT = "nixssssssssssssssssxxxxxxxxxxxxxxxxxxixxxxxxxxxxxxxxxxxi"
+_LOCS = ("enUS enGB koKR frFR deDE enCN zhCN enTW zhTW esES esMX ruRU ptPT ptBR itIT Unk "
+         "Mask").split()
+SKILLLINE_DBC_COLUMNS = (
+    ["ID", "CategoryID", "SkillCostsID"]
+    + [f"DisplayName_Lang_{loc}" for loc in _LOCS]
+    + [f"Description_Lang_{loc}" for loc in _LOCS]
+    + ["SpellIconID"]
+    + [f"AlternateVerb_Lang_{loc}" for loc in _LOCS]
+    + ["CanLink"])
+SKILLLINE_DBC_SIGNED = "ID CategoryID SkillCostsID SpellIconID CanLink".split()
+
+# ---- skillraceclassinfo_dbc : 8 columns (DBCfmt.h:103)
+# Binds a skill line to a race/class mask. Without a row here a class skill exists but nobody
+# is eligible for it.
+SKILLRACECLASSINFO_FMT = "diiiixix"
+SKILLRACECLASSINFO_DBC_COLUMNS = """
+ID SkillID RaceMask ClassMask Flags MinLevel SkillTierID SkillCostIndex
+""".split()
+SKILLRACECLASSINFO_DBC_SIGNED = SKILLRACECLASSINFO_DBC_COLUMNS
+
+# ---- talenttab_dbc : 24 columns (DBCfmt.h:122)
+# THE TRAP: DBCStores.cpp:554 skips any row whose `ClassMask & CLASSMASK_ALL_PLAYABLE` is zero,
+# with the comment "prevent memory corruption; otherwise cls will become 12 below". Class 10's
+# bit is not in that macro on stock, so a Demon Hunter talent tab is silently dropped and the
+# class gets no talent panel at all. That single line is most of why the core patch exists.
+TALENTTAB_FMT = "nxxxxxxxxxxxxxxxxxxxiiix"
+TALENTTAB_DBC_COLUMNS = (
+    ["ID"] + [f"Name_Lang_{loc}" for loc in _LOCS]
+    + ["SpellIconID", "RaceMask", "ClassMask", "PetTalentMask", "OrderIndex", "BackgroundFile"])
+TALENTTAB_DBC_SIGNED = "ID SpellIconID RaceMask ClassMask PetTalentMask OrderIndex".split()
+
+# ---- talent_dbc : 23 columns (DBCfmt.h:121)
+# One row per talent. SpellRank_1..5 are the spell ids of ranks 1..5; 6..9 exist in the file but
+# the core marks them FT_NA and never reads them.
+TALENT_FMT = "niiiiiiiixxxxixxixxixxx"
+TALENT_DBC_COLUMNS = """
+ID TabID TierID ColumnIndex SpellRank_1 SpellRank_2 SpellRank_3 SpellRank_4 SpellRank_5
+SpellRank_6 SpellRank_7 SpellRank_8 SpellRank_9 PrereqTalent_1 PrereqTalent_2 PrereqTalent_3
+PrereqRank_1 PrereqRank_2 PrereqRank_3 Flags RequiredSpellID CategoryMask_1 CategoryMask_2
+""".split()
+TALENT_DBC_SIGNED = TALENT_DBC_COLUMNS
+
+# ---- spellshapeshiftform_dbc : 35 columns (DBCfmt.h:117)
+# Row 22 is stock Metamorphosis (flags 0xd8, CreatureDisplayID_1 25277 = DemonForm.mdx). Rows
+# 23 and 24 are entirely blank in the stock file -- two free form slots. Demon Hunter takes 23
+# rather than reusing 22, so the warlock's form-22 passives cannot ride along.
+SPELLSHAPESHIFTFORM_FMT = "nxxxxxxxxxxxxxxxxxxiixiiixxiiiiiiii"
+SPELLSHAPESHIFTFORM_DBC_COLUMNS = (
+    ["ID", "BonusActionBar"] + [f"Name_Lang_{loc}" for loc in _LOCS]
+    + ["Flags", "CreatureType", "AttackIconID", "CombatRoundTime"]
+    + [f"CreatureDisplayID_{i}" for i in range(1, 5)]
+    + [f"PresetSpellID_{i}" for i in range(1, 9)])
+SPELLSHAPESHIFTFORM_DBC_SIGNED = (
+    ["ID", "BonusActionBar", "Flags", "CreatureType", "AttackIconID", "CombatRoundTime"]
+    + [f"CreatureDisplayID_{i}" for i in range(1, 5)]
+    + [f"PresetSpellID_{i}" for i in range(1, 9)])
+
+# ---- CharBaseInfo.dbc : CLIENT ONLY, no SQL half
+# 62 records of two bytes, `uint8 RaceID; uint8 ClassID;`, no index column and a one-byte string
+# block. This is the race/class matrix the create screen greys buttons out from. There is no
+# `CharBaseInfofmt` in DBCfmt.h and no reference to it anywhere in src/ -- the server's
+# equivalent gate is which `playercreateinfo` rows exist, which is why elves-only needs BOTH
+# halves and neither alone is sufficient.
+CHARBASEINFO_FMT = "bb"
+CHARBASEINFO_COLUMNS = ["RaceID", "ClassID"]
+
+
 SPELL_DBC = DbcTable("spell_dbc", "Spell.dbc",
                      SPELL_ENTRY_FMT, SPELL_DBC_COLUMNS, SPELL_DBC_SIGNED)
 SKILLLINEABILITY_DBC = DbcTable("skilllineability_dbc", "SkillLineAbility.dbc",
@@ -236,6 +368,97 @@ SKILLLINEABILITY_DBC = DbcTable("skilllineability_dbc", "SkillLineAbility.dbc",
 CHARSTARTOUTFIT_DBC = DbcTable("charstartoutfit_dbc", "CharStartOutfit.dbc",
                                CHAR_START_OUTFIT_FMT,
                                CHARSTARTOUTFIT_DBC_COLUMNS, CHARSTARTOUTFIT_DBC_SIGNED)
+CHRCLASSES_DBC = DbcTable("chrclasses_dbc", "ChrClasses.dbc",
+                          CHRCLASSES_FMT, CHRCLASSES_DBC_COLUMNS, CHRCLASSES_DBC_SIGNED,
+                          # Filename ONLY. PetNameToken is an FT_NA string offset in the FILE
+                          # but the world-DB column is `int` -- verified against
+                          # information_schema: chrclasses_dbc.Filename is varchar(100),
+                          # chrclasses_dbc.PetNameToken is int. Calling it a string here made
+                          # the generator write 'PET' into an integer column, which MySQL
+                          # rejects with "Incorrect integer value". A cloned row already
+                          # carries a valid offset for it, so it never needs writing.
+                          strings=("Filename",))
+SKILLLINE_DBC = DbcTable("skillline_dbc", "SkillLine.dbc",
+                         SKILLLINE_FMT, SKILLLINE_DBC_COLUMNS, SKILLLINE_DBC_SIGNED)
+SKILLRACECLASSINFO_DBC = DbcTable("skillraceclassinfo_dbc", "SkillRaceClassInfo.dbc",
+                                  SKILLRACECLASSINFO_FMT, SKILLRACECLASSINFO_DBC_COLUMNS,
+                                  SKILLRACECLASSINFO_DBC_SIGNED)
+TALENTTAB_DBC = DbcTable("talenttab_dbc", "TalentTab.dbc",
+                         TALENTTAB_FMT, TALENTTAB_DBC_COLUMNS, TALENTTAB_DBC_SIGNED,
+                         strings=("BackgroundFile",))
+TALENT_DBC = DbcTable("talent_dbc", "Talent.dbc",
+                      TALENT_FMT, TALENT_DBC_COLUMNS, TALENT_DBC_SIGNED)
+SPELLSHAPESHIFTFORM_DBC = DbcTable("spellshapeshiftform_dbc", "SpellShapeshiftForm.dbc",
+                                   SPELLSHAPESHIFTFORM_FMT, SPELLSHAPESHIFTFORM_DBC_COLUMNS,
+                                   SPELLSHAPESHIFTFORM_DBC_SIGNED)
+CHARBASEINFO_DBC = DbcTable(None, "CharBaseInfo.dbc",
+                            CHARBASEINFO_FMT, CHARBASEINFO_COLUMNS, ())
 
-ALL_TABLES = (SPELL_DBC, SKILLLINEABILITY_DBC, CHARSTARTOUTFIT_DBC)
-BY_SQL_NAME = {t.sql_table: t for t in ALL_TABLES}
+# The REGISTRY -- every table this toolkit can read, not the set any one feature emits. A
+# generator iterates its own spec's table tuple (dk_spec.DBC_TABLES, dh_spec.DBC_TABLES);
+# iterating this one would try to save files it never opened.
+ALL_TABLES = (SPELL_DBC, SKILLLINEABILITY_DBC, CHARSTARTOUTFIT_DBC, CHRCLASSES_DBC,
+              SKILLLINE_DBC, SKILLRACECLASSINFO_DBC, TALENTTAB_DBC, TALENT_DBC,
+              SPELLSHAPESHIFTFORM_DBC, CHARBASEINFO_DBC)
+BY_SQL_NAME = {t.sql_table: t for t in ALL_TABLES if t.sql_table}
+BY_DBC_FILE = {t.dbc_file: t for t in ALL_TABLES}
+
+
+# =============================================================================================
+# Gametables (gt*.dbc) are NOT DbcTables and cannot be.
+#
+# Their format string is "df" -- two SQL columns, ID and Data -- but the FILE has
+# `field_count = 1, record_size = 4`: just the float. `d` is FT_SORT, which
+# DBCFileLoader::GetFormatRecordSize (DBCFileLoader.cpp:146) adds ZERO bytes for, so the index
+# is the row number and exists only on the SQL side. Every DbcTable invariant
+# (`field_count == len(fmt)`, `record_size == format-implied size`) is therefore false for
+# them, and forcing them through would mean weakening the assertions that protect the other
+# nine tables.
+#
+# They matter because Blizzard filled the vacant class-10 slot with placeholders rather than
+# zeroes -- 0.2 base melee crit, 1.0 HP regen ratio -- so a new class inherits nonsense unless
+# each of these blocks is overwritten. Layout is (class - 1) * GT_MAX_LEVEL + (level - 1), i.e.
+# class 10 owns rows 900..999 in the 1100-row files, and row 9 in the 11-row *Base files.
+# =============================================================================================
+
+GT_MAX_LEVEL = 100
+
+
+class Gametable:
+    """One gt*.dbc: a flat array of float32, indexed by row number."""
+
+    def __init__(self, sql_table, dbc_file, per_class, comment):
+        self.sql_table = sql_table
+        self.dbc_file = dbc_file
+        self.per_class = per_class      # rows per class: GT_MAX_LEVEL, or 1 for the *Base files
+        self.comment = comment
+
+    def block(self, class_id):
+        """[lo, hi] inclusive row range this class owns."""
+        lo = (class_id - 1) * self.per_class
+        return lo, lo + self.per_class - 1
+
+
+CLASS_GAMETABLES = (
+    Gametable("gtchancetomeleecrit_dbc", "gtChanceToMeleeCrit.dbc", GT_MAX_LEVEL,
+              "melee crit per point of agility"),
+    Gametable("gtchancetomeleecritbase_dbc", "gtChanceToMeleeCritBase.dbc", 1,
+              "flat base melee crit -- the stock class-10 value is 0.2, i.e. 20%"),
+    Gametable("gtchancetospellcrit_dbc", "gtChanceToSpellCrit.dbc", GT_MAX_LEVEL,
+              "spell crit per point of intellect"),
+    Gametable("gtchancetospellcritbase_dbc", "gtChanceToSpellCritBase.dbc", 1,
+              "flat base spell crit -- stock class-10 value is 0.2"),
+    Gametable("gtoctregenhp_dbc", "gtOCTRegenHP.dbc", GT_MAX_LEVEL,
+              "out-of-combat health regen base ratio"),
+    Gametable("gtregenhpperspt_dbc", "gtRegenHPPerSpt.dbc", GT_MAX_LEVEL,
+              "health regen per point of spirit"),
+    Gametable("gtregenmpperspt_dbc", "gtRegenMPPerSpt.dbc", GT_MAX_LEVEL,
+              "mana regen per point of spirit -- zero for every non-caster, including us"),
+)
+
+# gtOCTClassCombatRatingScalar is (class - 1) * GT_MAX_RATING + rating + 1, NOT per level, so it
+# is listed apart from the block-copyable ones above. 32 ratings x 11 classes = 352 rows.
+GT_MAX_RATING = 32
+GT_CLASS_COMBAT_RATING_SCALAR = Gametable(
+    "gtoctclasscombatratingscalar_dbc", "gtOCTClassCombatRatingScalar.dbc", GT_MAX_RATING,
+    "per-class combat-rating scalars, indexed by rating rather than by level")

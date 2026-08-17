@@ -1,0 +1,82 @@
+[worldserver]
+
+########################################################################################
+# mod-toy-robot
+#
+# The Pocket Concierge: one item (90000), granted to every character at login, which
+# summons a robot (creature 9000200) offering bank, vendor, reagents, repair, auction
+# house, mailbox, barbershop, guild vault and the hunter stable. See docs/utility-npcs.md for the player-facing version.
+#
+# This file MUST exist: modules/CMakeLists.txt builds the compile-time CONFIG_FILE_LIST
+# from `file(GLOB ${MODULE_CONFIG_PATH}/*.conf.dist)` with the .dist stripped, so a
+# module with no conf.dist never gets its .conf read at all.
+#
+# The values below are also the module's compiled-in defaults (toy_robot.cpp
+# ToyRobotConfig::Load). Keep the two in sync: on this deployment
+# deploy/docker-compose.yml bind-mounts conf/modules over /opt/ac/etc/modules, which
+# shadows the installed copy of this file entirely, so an operator who omits a key gets
+# the compiled default rather than what is written here.
+#
+# No inline comments anywhere in this file. The parser has no inline-comment handling --
+# `Key = 1  # note` reads the value as the whole string after the `=`.
+########################################################################################
+
+#
+#    ToyRobot.Enable
+#        Description: Master switch. At 0 the item stops being granted, using an
+#                     existing copy says so and does nothing, and the robot's gossip
+#                     menu goes silent. Nothing is deleted -- item_template 90000 and
+#                     creature_template 9000200 are DATA and stay in the world DB, and
+#                     any copy already in a player's bags stays there.
+#
+#                     Takes effect on `.reload config` for everything except robots
+#                     already standing in the world, which run out their timer.
+#        Default:     1 (enabled)
+#
+
+ToyRobot.Enable = 1
+
+#
+#    ToyRobot.GrantOnLogin
+#        Description: Put a Pocket Concierge in the bags of any character that does not
+#                     have one, at every login.
+#
+#                     THIS IS A RE-GRANT, NOT A ONE-TIME GIFT. There is no "already
+#                     given" flag anywhere: the check is HasItemCount(90000, 1, true),
+#                     which includes the bank. Destroy the toy and the next login hands
+#                     you another. That is deliberate -- it means no character can end up
+#                     permanently without it, and there is no extra table to keep -- but
+#                     it also means a player who wants the bag slot back cannot have it
+#                     while this is 1.
+#
+#                     If the character's bags are full the grant fails, says so in chat,
+#                     and retries on the next login.
+#
+#                     Set to 0 to stop handing it out without disabling the toy itself:
+#                     existing copies keep working.
+#        Default:     1 (grant)
+#
+
+ToyRobot.GrantOnLogin = 1
+
+#
+#    ToyRobot.DurationSecs
+#        Description: How long a summoned robot stays before despawning.
+#
+#                     300 is not arbitrary. The item carries the stock Jeeves spell
+#                     (67826) purely so the client has a real spell to render, and that
+#                     spell's tooltip tells the player the robot lasts $68054d -- five
+#                     minutes. Setting this to something else makes the item's own
+#                     tooltip lie. Changing it is fine; just know which number the
+#                     player is reading.
+#
+#                     There is no cooldown on the toy. Using it again despawns your
+#                     previous robot and places a new one, so the duration is a
+#                     convenience limit rather than a rationing mechanism.
+#
+#                     0 is rejected at load (it would despawn the robot on its first
+#                     update tick, which reads as a broken toy) and falls back to 300.
+#        Default:     300 (five minutes)
+#
+
+ToyRobot.DurationSecs = 300

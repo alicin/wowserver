@@ -15,7 +15,14 @@ lives elsewhere and is not repeated:
 | Disk/RAM/CPU sizing, MySQL tuning, backups, the weekly restart | [hosting.md](hosting.md) |
 | The four databases, first boot, accounts, GM levels | [bring-up.md](bring-up.md) |
 | Client setup, `realmlist.wtf` vs `Config.wtf`, the addon pack | [client.md](client.md) |
-| Death Knights, `patch-Z.MPQ`, the verification checklist | [death-knights.md](death-knights.md) |
+| Death Knights, the verification checklist | [death-knights.md](death-knights.md) |
+| Demon Hunters, the core patch, the **patched `Wow.exe`** | [demon-hunters.md](demon-hunters.md) |
+
+> **`patch-Z.MPQ` is now built by both class features together**, because there can only be one
+> archive — two archives cannot both supply `Spell.dbc`, and `patch-Z` is already the top of the
+> resolved chain. Build it with `scripts/build-client-patch.sh`, never by running either
+> generator's MPQ step alone: whichever ran second would silently delete the other class.
+> [demon-hunters.md §5.2](demon-hunters.md) has the full reasoning.
 
 ---
 
@@ -86,7 +93,7 @@ uploading, and rsync resumes — a dropped link costs the tail of one file, not 
 Useful subsets:
 
 ```bash
-scripts/deploy-vps.sh sync image up verify      # ship a new build
+scripts/deploy-vps.sh sync image env up verify  # ship a new build
 scripts/deploy-vps.sh verify                    # cheap, run it any time
 scripts/deploy-vps.sh artefacts                 # resume the upload
 scripts/deploy-vps.sh --verify-sha artefacts     # re-hash before a 17 GB upload
@@ -177,8 +184,12 @@ ID. An ID match is therefore a match on the whole image, not just its name. A tr
 loads a different ID or fails outright; it never loads the right one. A mismatch aborts before
 anything is deployed.
 
-The loaded image is then re-tagged `ghcr.io/<owner>/wowserver:img-<12 hex of the digest>` and
-that tag is written to `IMAGE_TAG` in the VPS's `.env`. Content-addressed, so:
+The loaded image is then re-tagged `ghcr.io/<owner>/wowserver:img-<12 hex of the digest>`.
+**`stage_image` computes that tag but does not persist it** — `stage_env` is the only writer of
+`IMAGE_TAG` in the VPS's `.env` (`deploy-vps.sh:740` passes `IMAGE_TAG_IN`, `:790` does the
+`set_kv`). That is why `env` belongs in the ship-a-new-build recipe above: run `sync image up`
+without it and compose restarts whatever `IMAGE_TAG` already said, so a freshly shipped image
+sits on the box unused and the deploy looks like it worked. Content-addressed, so:
 
 - re-running `stage_image` with an unchanged image is a no-op — the tag already resolves to that
   exact ID and nothing is sent;

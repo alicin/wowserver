@@ -1106,11 +1106,16 @@ PY
 
     local -a rflags=(
         -a --human-readable --info=progress2
-        # Resumable: --partial-dir keeps the fragment out of the served directory (a half a
-        # zip that the webapp happily lists is worse than no zip), and --append-verify
-        # checksums the existing prefix before continuing, so a changed source re-sends in
-        # full instead of concatenating two different builds.
-        --partial --partial-dir=.rsync-partial --append-verify
+        # Resumable: --partial-dir keeps the fragment out of the served directory, because a
+        # half a zip that the webapp happily lists is worse than no zip.
+        #
+        # --append-verify USED TO BE HERE and had to go: rsync 3.5 rejects the combination
+        # outright -- "rsync: --append cannot be used with --partial-dir" -- and fails the
+        # whole stage before sending a byte. Nothing is lost by dropping it. Its stated job was
+        # to re-send in full when the source changed rather than concatenate two different
+        # builds, and that is what rsync's ordinary delta transfer does anyway; append mode was
+        # the thing that needed the guard, not the thing providing it.
+        --partial --partial-dir=.rsync-partial
         # Old client zips are 17 GB each. Deleting them is the point, not a side effect.
         --delete --exclude='.rsync-partial/'
     )

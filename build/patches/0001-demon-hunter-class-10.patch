@@ -1,0 +1,84 @@
+diff --git a/src/server/game/Entities/Player/Player.cpp b/src/server/game/Entities/Player/Player.cpp
+index c573262..e0cfe55 100644
+--- a/src/server/game/Entities/Player/Player.cpp
++++ b/src/server/game/Entities/Player/Player.cpp
+@@ -5287,7 +5287,7 @@ void Player::GetDodgeFromAgility(float& diminishing, float& nondiminishing)
+         0.021080f, // Shaman
+         0.036587f, // Mage
+         0.024211f, // Warlock
+-        0.0f,      // ??
++        0.020957f, // Demon Hunter -- Rogue's value
+         0.056097f  // Druid
+     };
+     // Crit/agility to dodge/agility coefficient multipliers; 3.2.0 increased required agility by 15%
+@@ -5302,7 +5302,7 @@ void Player::GetDodgeFromAgility(float& diminishing, float& nondiminishing)
+         1.60f / 1.15f,  // Shaman
+         1.00f / 1.15f,  // Mage
+         0.97f / 1.15f,  // Warlock (?)
+-        0.0f,           // ??
++        2.00f / 1.15f,  // Demon Hunter -- Rogue's value
+         2.00f / 1.15f   // Druid
+     };
+ 
+diff --git a/src/server/game/Entities/Unit/StatSystem.cpp b/src/server/game/Entities/Unit/StatSystem.cpp
+index 24c025a..a274505 100644
+--- a/src/server/game/Entities/Unit/StatSystem.cpp
++++ b/src/server/game/Entities/Unit/StatSystem.cpp
+@@ -719,7 +719,7 @@ const float m_diminishing_k[MAX_CLASSES] =
+     0.9880f,  // Shaman
+     0.9830f,  // Mage
+     0.9830f,  // Warlock
+-    0.0f,     // ??
++    0.9880f,  // Demon Hunter -- Rogue's value; see build/patches/README.md
+     0.9720f   // Druid
+ };
+ 
+@@ -736,7 +736,7 @@ float Player::GetMissPercentageFromDefence() const
+         16.00f,     // Shaman  //?
+         16.00f,     // Mage    //?
+         16.00f,     // Warlock //?
+-        0.0f,       // ??
++        16.00f,     // Demon Hunter -- Rogue's value
+         16.00f      // Druid   //?
+     };
+ 
+@@ -763,7 +763,7 @@ void Player::UpdateParryPercentage()
+         145.560408f,    // Shaman
+         0.0f,           // Mage
+         0.0f,           // Warlock
+-        0.0f,           // ??
++        145.560408f,    // Demon Hunter -- Rogue's value; DH parries
+         0.0f            // Druid
+     };
+ 
+@@ -809,7 +809,7 @@ void Player::UpdateDodgePercentage()
+         145.560408f,    // Shaman
+         150.375940f,    // Mage
+         150.375940f,    // Warlock
+-        0.0f,           // ??
++        145.560408f,    // Demon Hunter -- Rogue's value
+         116.890707f     // Druid
+     };
+ 
+diff --git a/src/server/shared/SharedDefines.h b/src/server/shared/SharedDefines.h
+index 8b6dacc..862e6a1 100644
+--- a/src/server/shared/SharedDefines.h
++++ b/src/server/shared/SharedDefines.h
+@@ -132,7 +132,7 @@ enum Classes
+     CLASS_SHAMAN        = 7, // TITLE Shaman
+     CLASS_MAGE          = 8, // TITLE Mage
+     CLASS_WARLOCK       = 9, // TITLE Warlock
+-    //CLASS_UNK           = 10,
++    CLASS_DEMON_HUNTER  = 10, // TITLE Demon Hunter
+     CLASS_DRUID         = 11 // TITLE Druid
+ };
+ 
+@@ -143,7 +143,7 @@ enum Classes
+     ((1<<(CLASS_WARRIOR-1))|(1<<(CLASS_PALADIN-1))|(1<<(CLASS_HUNTER-1))| \
+     (1<<(CLASS_ROGUE-1))  |(1<<(CLASS_PRIEST-1)) |(1<<(CLASS_SHAMAN-1))| \
+     (1<<(CLASS_MAGE-1))   |(1<<(CLASS_WARLOCK-1))|(1<<(CLASS_DRUID-1)) | \
+-    (1<<(CLASS_DEATH_KNIGHT-1)))
++    (1<<(CLASS_DEATH_KNIGHT-1))|(1<<(CLASS_DEMON_HUNTER-1)))
+ 
+ // valid classes for creature_template.unit_class
+ #define CLASSMASK_ALL_CREATURES ((1<<(CLASS_WARRIOR-1)) | (1<<(CLASS_PALADIN-1)) | (1<<(CLASS_ROGUE-1)) | (1<<(CLASS_MAGE-1)))

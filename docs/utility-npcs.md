@@ -1,12 +1,13 @@
 # Utility NPCs
 
-Six helpers are standing around the world. They are free, they are friendly, and none of them can
-be attacked or will attack you. This page is who they are, what each one does for you, and every
-place you can find one.
+Six helpers are standing around the world, and a seventh lives in your bags. They are free, they
+are friendly, and none of them can be attacked or will attack you. This page is who they are, what
+each one does for you, and every place you can find one.
 
 Mechanics — the guid block, the generator, the schema — live in
-[`build/modules/mod-utility-npcs/README.md`](../build/modules/mod-utility-npcs/README.md). This
-page is for playing.
+[`build/modules/mod-utility-npcs/README.md`](../build/modules/mod-utility-npcs/README.md) and, for
+the one in your bags, [`build/modules/mod-toy-robot/README.md`](../build/modules/mod-toy-robot/README.md).
+This page is for playing.
 
 ---
 
@@ -142,3 +143,60 @@ so nothing they do can flag you or aggro you.
 **Turning them off.** `UtilityNPCs.Enable = 0` in `conf/modules/mod_utility_npcs.conf` hides all
 734 of them from players (GMs still see them) and takes full effect after a worldserver restart.
 It does not delete anything.
+
+---
+
+## 7. The seventh: BUTL-R 9000, who travels with you
+
+The other six stand still. This one is an item.
+
+**Every character already has one.** Look for **Pocket Concierge** in your bags — it is handed out
+at login, and if you ever destroy it you get another the next time you log in. It is soulbound, it
+weighs one bag slot, and it is free.
+
+Use it and a small robot butler unfolds next to you for **five minutes**. Click him and he offers
+up to nine things — the last two only when they apply to you:
+
+| Option | What you get |
+|---|---|
+| **Open my bank** | Your bank, exactly as if you were standing at one |
+| **Show me your wares** | A general trader — Northrend food and drink, arrows and shot, a bag. He will also buy anything you are carrying |
+| **I need reagents** | The full reagent counter: candles, runes, symbols, seeds, corpse dust, arcane powder, ankhs, parchment, vials, thread, and every rank of rogue poison |
+| **Repair my equipment** | The merchant window with the repair and repair-all buttons live. Full price — he gives no reputation discount |
+| **Open the auction house** | The neutral auction house — the same one both factions can see |
+| **Open my mailbox** | Your mail |
+| **Set down the barber chair** | Unfolds a barber chair and sits you in it. Change your hair style, hair colour or facial hair anywhere on the map (Tauren also get fur colour) |
+| **Set down the guild vault** | Places a guild vault beside him. **Click the vault**, not the robot — see below. Only appears if you are in a guild |
+| **Stable my pet** | The hunter stable. Only appears if you are a hunter |
+
+A few things worth knowing:
+
+- **There is no cooldown.** Use it as often as you like. Calling him again just picks up the
+  previous robot and puts down a new one — you never end up with two.
+- **Not in combat.** He will refuse, and say so.
+- **A robot you already summoned keeps working while you are dead** — deliberately, because
+  checking your mail on the corpse run is exactly when a pocket mailbox earns its place. You
+  cannot call out a *new* one as a ghost, though: the client refuses to use any item while dead.
+- **The tooltip undersells him.** It will say something about Jeeves granting bank access to very
+  skilled engineers. Ignore it — that text is borrowed. It happens to name three of the nine
+  things he does (bank, buy/sell, repair) and is silent on the other six. There
+  is no engineering requirement and no profession requirement of any kind.
+- **The auction house is the neutral one, and that is not free.** Both factions post to and buy
+  from the same house through him, which no city auctioneer offers — but the neutral house carries
+  its own deposit and cut rates (from `AuctionHouse.dbc`, applied at `AuctionHouseMgr.cpp:99` and
+  `:570`), and they are the harshest of the three houses. Anything you list through him is also
+  invisible to someone standing at a city auctioneer, and vice versa. Use him for convenience and
+  for cross-faction trade; walk to a city auctioneer for anything expensive.
+- **The guild vault is the one thing you click separately.** Everything else opens straight from
+  his menu; the vault cannot. The client has to learn the vault's identity by clicking it, or
+  every deposit and withdrawal afterwards is silently thrown away — so he puts a real vault on the
+  ground next to himself and you click that. Stay within ten yards of it while the window is open,
+  and finish before the five minutes are up.
+- **The barber chair is not.** He places it *and* sits you in it in one go, so "I need a haircut"
+  is a single click. Don't walk away mid-haircut — standing up cancels it, exactly as it does in a
+  real barbershop.
+- **Repair is full price.** He is faction 35, which has no reputation to earn, so there is no
+  discount to apply. Guild-funded repair works normally if your rank allows it.
+- **Stabling dismounts you.** He does this on purpose, copying what a real stable master does:
+  the core dismounts you first because retrieving a pet while mounted can delete the pet. Don't
+  click it while flying over Northrend.

@@ -141,7 +141,7 @@ class Dbc:
         unsigned would emit 4294967295 into a signed `int` column and blow up under
         STRICT_TRANS_TABLES.
         """
-        from dbc_tables import KIND_FLOAT, KIND_STRING, KIND_UINT8, KIND_INT32
+        from .dbc_tables import KIND_FLOAT, KIND_STRING, KIND_UINT8, KIND_INT32
         k = self.table.kind(col)
         if k == KIND_STRING:
             return self.get_str(row, col)
@@ -154,7 +154,7 @@ class Dbc:
         return self.get_u32(row, col)
 
     def set_cell(self, row, col, value):
-        from dbc_tables import KIND_FLOAT, KIND_STRING, KIND_UINT8, KIND_INT32
+        from .dbc_tables import KIND_FLOAT, KIND_STRING, KIND_UINT8, KIND_INT32
         k = self.table.kind(col)
         if k == KIND_STRING:
             self.set_str(row, col, value)
@@ -186,6 +186,27 @@ class Dbc:
         which is correct: the old string block is never rewritten, only appended to."""
         self.records.append(bytearray(self.records[src_row]))
         return len(self.records) - 1
+
+    def sort_by_index_column(self):
+        """Re-sort records ascending by the index column. Returns the new row of each id.
+
+        NOT a general-purpose tidy-up, and not safe on every file. Use it only where a record's
+        position carries no meaning beyond its id -- which is true for the ones this repo
+        appends to, because `DBCFileLoader` builds an id->record index table and `LookupEntry`
+        goes through it rather than through row order.
+
+        It exists for `ChrClasses.dbc`, where a new record has to land in the MIDDLE. Stock ids
+        run 1-9 then 11, so appending class 10 leaves the file 1..9, 11, 10 -- and while the
+        server would not care, the create screen enumerates classes in FILE order, so the new
+        class button would appear after Druid instead of between Warlock and Druid. Sorting
+        puts it where its id says it belongs.
+        """
+        ic = self.table.index_column()
+        assert ic is not None, (
+            f"{self.table.dbc_file} has no index column, so it has no sort order to restore")
+        order = sorted(range(len(self.records)), key=lambda i: self.get_u32(i, ic))
+        self.records = [self.records[i] for i in order]
+        return {self.get_u32(i, ic): i for i in range(len(self.records))}
 
     def is_strictly_ascending(self):
         ids = self.ids()

@@ -44,6 +44,40 @@ jobs:
           persist-credentials: false
 
       # ---------------------------------------------------------------------------------------
+      # The class generators' OFFLINE half.
+      #
+      # `dkspells.py --check` and `dhspells.py` proper cannot run here: both read the live world
+      # database and the extracted client DBCs, and CI has neither. But a large part of what
+      # they protect is pure data consistency — ID-block collisions, a second record naming a
+      # block that does not exist, a starting-bar button for a spell the character will not have
+      # yet, an ability borrowing a spell family it must not — and all of that is checkable with
+      # nothing but the source tree.
+      #
+      # Importing the modules is itself a test: dbc_tables asserts every table's column count
+      # against its DBCfmt.h format string at import time, and dh_donors asserts that every
+      # column name it overrides is real. A typo in either is an import error, here, rather than
+      # a worldserver that aborts at boot with an ASSERT in DBCDatabaseLoader.
+      # ---------------------------------------------------------------------------------------
+      - name: Class generators — spec self-check
+        run: |
+          set -euo pipefail
+          # Importing acdbc runs DbcTable's own assertions: for each of the ten tables, that
+          # its column list is exactly as long as its DBCfmt.h format string. That equality is
+          # what DBCDatabaseLoader.cpp:124 ASSERTs at boot, and getting it wrong aborts
+          # worldserver rather than logging.
+          python3 -c "import sys; sys.path.insert(0, 'build/tools'); from acdbc import dbc_tables, dbclib, gametable, mpqlib; print(f'acdbc: {len(dbc_tables.ALL_TABLES)} tables, {len(dbc_tables.CLASS_GAMETABLES)} gametables')"
+          python3 build/modules/mod-demon-hunter/tools/dh_spec.py
+          for f in dh_donors dh_talents; do
+            if [ -f "build/modules/mod-demon-hunter/tools/$f.py" ]; then
+              python3 "build/modules/mod-demon-hunter/tools/$f.py" >/dev/null \
+                && echo "$f: OK"
+            else
+              echo "::warning::$f.py absent — those records are not being generated"
+            fi
+          done
+          python3 -c "import sys; sys.path.insert(0, 'build/modules/mod-dk-lowlevel/tools'); import dk_spec; print(f'dk_spec: {len(dk_spec.ABILITIES)} abilities')"
+
+      # ---------------------------------------------------------------------------------------
       # scripts/ — bootstrap.sh, phase.sh, backup.sh, restore.sh, soap-cmd.sh, health.sh.
       # These run as root on the VPS, some of them from cron with nobody watching. `bash -n` is
       # the floor; shellcheck is what catches the unquoted expansion in a `rm -rf "$dir"/…`.
