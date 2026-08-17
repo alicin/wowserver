@@ -60,11 +60,27 @@ import sys
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS_DIR)
 sys.path.insert(0, os.path.join(TOOLS_DIR, "..", "..", "..", "tools"))
+sys.path.insert(0, os.path.join(TOOLS_DIR, "..", "..", "..", "tools", "ascension"))
 
 import dh_spec as spec                                             # noqa: E402
 from acdbc import dbc_tables, gametable, mpqlib                    # noqa: E402
 from acdbc.dbc_tables import KIND_FLOAT, KIND_STRING               # noqa: E402
 from acdbc.dbclib import Dbc                                       # noqa: E402
+
+
+# THE TWO NUMBERS THAT DECIDE WHETHER THE WORLDSERVER BOOTS.
+#
+# SpellMgr::LoadSpellInfoStore walks every record and ASSERTs that each effect is below
+# TOTAL_SPELL_EFFECTS and each aura below TOTAL_AURAS (SharedDefines.h). They are written as
+# the last legal VALUE rather than the count, because that is how the check below reads.
+#
+# They matter here and nowhere else in this repo because this is the only generator that
+# transplants records from a DIFFERENT server's client. Ascension extended both enums -- their
+# private effects 165/175/183/195 and auras 317/353/354 are ordinary data in their file and a
+# fatal assertion in ours. A number nobody would think to check, because for a hand-authored
+# record it cannot be wrong.
+MAX_SPELL_EFFECT = 164
+MAX_SPELL_AURA = 316
 
 
 # =============================================================================================
@@ -243,6 +259,9 @@ class Plan:
         self.dbcs = {}
         self.gametables = {}
         self.sources = {}
+        self.rank_chains = []          # (ability key, (rank spell ids...)) for spell_ranks
+        self._asc = "unloaded"         # sentinel: None means "tried and failed", do not retry
+        self.source_map = {}           # third-party spell id -> the id we gave that record
 
         for t in spec.DBC_TABLES:
             path, src = self._resolve(t.dbc_file)
@@ -580,6 +599,99 @@ class Plan:
               f"created {len(created)} new row(s)")
         return widened, created
 
+    # Every Spell.dbc column whose VALUE IS A SPELL ID. A transplanted record carries the
+    # source server's ids in all of them, and each one means something different when it lands
+    # in a file where that id does not exist:
+    #
+    #   EffectTriggerSpell_*   the effect fires nothing. Silent -- the ability still casts, it
+    #                          just does none of the damage the tooltip promises.
+    #   *AuraSpell             the "requires/excludes aura X" gate can never be satisfied, so
+    #                          the spell is either always castable or never castable.
+    #   ModalNextSpell         the follow-up button never appears.
+    #
+    # None of these produce an error on either side. That is the whole reason this list is
+    # written out rather than left to "we would notice".
+    SPELL_REFERENCE_COLUMNS = (
+        "EffectTriggerSpell_1", "EffectTriggerSpell_2", "EffectTriggerSpell_3",
+        "CasterAuraSpell", "TargetAuraSpell",
+        "ExcludeCasterAuraSpell", "ExcludeTargetAuraSpell",
+        "ModalNextSpell",
+    )
+
+    def remap_source_references(self, checks):
+        """Repoint every spell-id cell in a transplanted record at OUR id for that spell.
+
+        Runs after everything is emitted, because a record may legitimately reference another
+        record that had not been created yet when it was itself transplanted -- Twin Slice's
+        parent is built before its two shells, and Felspears before the bolt every rank fires.
+
+        Three outcomes per cell, and the third is the point of the whole pass:
+
+          * 0            left alone.
+          * mapped       rewritten to our id. This is the common case and it is what makes an
+                         imported kit hang together instead of being 158 disconnected records.
+          * NOT mapped   zeroed, and reported. The source server had a record for it and we did
+                         not import one, so the reference cannot be honoured. Zeroing is the
+                         honest failure: an effect that fires nothing is inert, whereas a stale
+                         foreign id is a live pointer into whatever OUR file happens to have at
+                         that number -- and at 500000-1200000 that is usually nothing, but it
+                         only has to be something once.
+        """
+        d = self.dbcs["Spell.dbc"]
+        t = d.table
+        if not self.source_map:
+            return
+        cols = [(c, t.index_of[c]) for c in self.SPELL_REFERENCE_COLUMNS if c in t.index_of]
+        ours = set(self.source_map.values())
+        remapped = dangling = 0
+        seen_dangling = {}
+        for row in range(len(d.records)):
+            sid = d.get_i32(row, t.index_of["ID"])
+            if sid not in ours:
+                continue                      # not one of ours; never touch a stock record
+            for col, ci in cols:
+                ref = d.get_i32(row, ci)
+                if not ref:
+                    continue
+                if ref in self.source_map:
+                    d.set_i32(row, ci, self.source_map[ref])
+                    remapped += 1
+                elif ref not in d.index():
+                    d.set_i32(row, ci, 0)
+                    dangling += 1
+                    seen_dangling.setdefault(ref, []).append(f"{sid}.{col}")
+        for ref, where in sorted(seen_dangling.items()):
+            # skip(), not expect(False): a dangling reference is EXPECTED for the parts of a
+            # kit we deliberately did not import, and the pass has already made it safe by
+            # zeroing it. It is reported so the count is visible, not to fail the build.
+            checks.skip("#67",
+                        f"imported spell reference {ref} has no record on this realm; zeroed in "
+                        f"{len(where)} cell(s): {', '.join(where[:4])}"
+                        f"{' ...' if len(where) > 4 else ''}")
+        print(f"   source references: {remapped} remapped, {dangling} dangling zeroed "
+              f"({len(seen_dangling)} distinct)")
+        return remapped, dangling
+
+    def _ascension(self, checks):
+        """The Ascension client's Spell.dbc, opened once, or None if it is not present.
+
+        Loaded lazily and cached -- including the failure -- because it is a 229 MB read and
+        because a checkout with no Ascension client installed must still be able to build every
+        donor-based ability. An absent client is a SKIP, not a failure: it degrades the run to
+        "no transplanted records", which the per-ability checks then report individually.
+        """
+        if self._asc == "unloaded":
+            try:
+                import importer as _importer
+                self._asc = _importer.AscensionSpells(
+                    self.dbcs["Spell.dbc"].table, spec.ASCENSION_CLIENT_DATA)
+                print(f"   Ascension source: {self._asc.count:,} records from "
+                      f"{spec.ASCENSION_CLIENT_DATA}")
+            except Exception as exc:                       # noqa: BLE001 -- reported, not raised
+                self._asc = None
+                checks.skip("#64", f"no Ascension client to import from ({exc})")
+        return self._asc
+
     # ------------------------------------------------------------------------ spells -----
     def build_spells(self, checks):
         """Clone one Spell.dbc record per ability, plus its SkillLineAbility row.
@@ -607,78 +719,194 @@ class Plan:
 
         # Ascending, because Spell.dbc must stay strictly ascending -- DBCFileLoader sizes its
         # index table from the highest id and the client walks the file in order.
+        #
+        # Ids allocated in THIS loop are tracked separately from `idx`, which was taken before
+        # it started. Without that, rank 2 of an ability would be checked for collision against
+        # a snapshot that cannot contain rank 1, and two ranks could quietly land on one id.
+        taken = set()
         for ability in sorted(spec.ABILITIES, key=lambda a: _ability_spell_id(a)):
-            sid = _ability_spell_id(ability)
+            base_sid = _ability_spell_id(ability)
+            n_ranks = max(1, ability.ranks)
+
+            # A single-record ability owns exactly one id, so a ladder cannot be hung off it.
+            # Caught here rather than by the ascending check later, where it would surface as an
+            # unrelated collision in a different ability's block.
+            if ability.key not in spec.ABILITY_BLOCKS:
+                if not checks.expect(n_ranks == 1, "#59",
+                                     f"{ability.name}: has {n_ranks} ranks but is a SINGLES "
+                                     f"entry, which owns one id -- give it an ABILITY_BLOCKS "
+                                     f"block instead"):
+                    continue
+
+            # The per-rank transplant sources, rank 1 first. Empty for a donor-built ability.
+            sources = ((ability.source,) + tuple(ability.source_ranks)) if ability.source else ()
+            if sources and not checks.expect(
+                    len(sources) == n_ranks, "#60",
+                    f"{ability.name}: {len(sources)} source record(s) for {n_ranks} rank(s) -- "
+                    f"source_ranks must exclude `source` itself"):
+                continue
+
+            levels = ability.rank_levels or (ability.level,) * n_ranks
+            if not checks.expect(len(levels) == n_ranks, "#61",
+                                 f"{ability.name}: {len(levels)} rank_levels for {n_ranks} "
+                                 f"ranks"):
+                continue
+            if not checks.expect(levels[0] == ability.level, "#62",
+                                 f"{ability.name}: rank_levels[0] is {levels[0]}, but the "
+                                 f"ability is learned at {ability.level}"):
+                continue
+            if not checks.expect(all(b > a for a, b in zip(levels, levels[1:])), "#63",
+                                 f"{ability.name}: rank levels {levels} are not strictly "
+                                 f"ascending, so a later rank would supersede an unlearned one"):
+                continue
+
             if not checks.expect(ability.donor in idx, "#26",
                                  f"{ability.name}: donor {ability.donor} exists in Spell.dbc"):
                 continue
-            if not checks.expect(sid not in idx, "#27",
-                                 f"{ability.name}: id {sid} is free"):
+
+            rank_ids = []
+            for r in range(n_ranks):
+                sid = (spec.spell_id_for(ability.key, r) if ability.key in spec.ABILITY_BLOCKS
+                       else base_sid)
+                if not checks.expect(sid not in idx and sid not in taken, "#27",
+                                     f"{ability.name} rank {r + 1}: id {sid} is free"):
+                    continue
+                taken.add(sid)
+                rank_ids.append((r, sid))
+            if not rank_ids:
                 continue
 
-            row = d.clone_row(idx[ability.donor])
-            cells = {}
-            cells.update(dh_donors.ALWAYS)
-            cells.update(dh_donors.OVERRIDES.get(ability.key, {}))
-            # Identity last. `family` is None for everything but Vengeful Retreat, where
-            # SpellEffects.cpp:5067 makes family 9 the only way the leap goes backwards.
-            cells.update({
-                "ID": sid,
-                "Name_Lang_enUS": ability.name,
-                "NameSubtext_Lang_enUS": "",
-                "BaseLevel": ability.level,
-                "SpellLevel": ability.level,
-                "SpellClassSet": ability.family if ability.family is not None
-                else spec.CHRCLASS_ROW["SpellClassSet"],
-            })
-            if ability.cooldown_ms:
-                cells["RecoveryTime"] = ability.cooldown_ms
-            if ability.cost:
-                cells["ManaCost"] = ability.cost
-            if ability.family is not None:
-                # A borrowed family with a non-zero mask is reachable by that class's talents.
-                # IsAffected needs a mask overlap, so zeroing them severs every one of them.
-                cells.update({"SpellClassMask_1": 0, "SpellClassMask_2": 0,
-                              "SpellClassMask_3": 0})
+            emitted_ranks = []
+            for r, sid in rank_ids:
+                row = d.clone_row(idx[ability.donor])
+                cells = {}
 
-            for col, val in cells.items():
-                if col not in t.index_of:
-                    checks.expect(False, "#28",
-                                  f"{ability.name}: {col!r} is not a Spell.dbc column")
-                    continue
-                ci = t.index_of[col]
-                if t.kind(ci) == KIND_STRING:
-                    d.set_str(row, ci, val)
-                elif t.kind(ci) == KIND_FLOAT:
-                    d.set_f32(row, ci, float(val))
-                else:
-                    d.set_i32(row, ci, int(val))
+                # THE TRANSPLANT. When an ability names a `source`, the donor clone above is
+                # immediately overwritten by the third-party record, cell for cell. See
+                # build/tools/ascension/importer.py for why this beats a donor and for the one
+                # trap: string columns hold OFFSETS into the source file's own string block, so
+                # they are resolved to text there and re-added here as text.
+                #
+                # It is applied BEFORE dh_donors.ALWAYS so the house rules still win -- an
+                # imported record carrying a foreign SpellClassSet or a stale
+                # CategoryRecoveryTime must not survive into our file.
+                if sources:
+                    src_id = sources[r]
+                    asc = self._ascension(checks)
+                    if asc is not None and checks.expect(
+                            src_id in asc, "#64",
+                            f"{ability.name} rank {r + 1}: source spell {src_id} exists in the "
+                            f"Ascension client"):
+                        cells.update(asc.cells(src_id))
+                        cells.pop("ID", None)          # identity is ours, set below
+                        self.source_map[src_id] = sid
 
-            # Blank every non-enUS locale slot. The clone carries the DONOR's, so a deDE client
-            # would render the donor's German name for a Demon Hunter ability -- worse than an
-            # empty string, which the client falls back to enUS for.
-            for col in t.columns:
-                if "_Lang_" in col and not col.endswith(("_Mask", "_enUS")):
-                    d.set_str(row, t.index_of[col], "")
+                cells.update(dh_donors.ALWAYS)
+                cells.update(dh_donors.OVERRIDES.get(ability.key, {}))
+                # Identity last. `family` is None for everything but Vengeful Retreat, where
+                # SpellEffects.cpp:5067 makes family 9 the only way the leap goes backwards.
+                cells.update({
+                    "ID": sid,
+                    "Name_Lang_enUS": ability.name,
+                    # A ladder's ranks are separate spells sharing one name; the client tells
+                    # them apart by this subtext alone and the spellbook groups on it. Left
+                    # empty for a single-record ability, where "Rank 1" would be a lie.
+                    "NameSubtext_Lang_enUS": f"Rank {r + 1}" if n_ranks > 1 else "",
+                    "BaseLevel": levels[r],
+                    "SpellLevel": levels[r],
+                    "SpellClassSet": ability.family if ability.family is not None
+                    else spec.CHRCLASS_ROW["SpellClassSet"],
+                })
+                if ability.cooldown_ms:
+                    cells["RecoveryTime"] = ability.cooldown_ms
+                if ability.cost:
+                    cells["ManaCost"] = ability.cost
+                if ability.family is not None:
+                    # A borrowed family with a non-zero mask is reachable by that class's
+                    # talents. IsAffected needs a mask overlap, so zeroing them severs each one.
+                    cells.update({"SpellClassMask_1": 0, "SpellClassMask_2": 0,
+                                  "SpellClassMask_3": 0})
 
-            slid = spec.sla_id_for(sid)
-            srow = sla.clone_row(0)
-            for col, val in (
-                    ("ID", slid), ("SkillLine", spec.PRIMARY_SKILL_LINE), ("Spell", sid),
-                    ("RaceMask", spec.DH_RACE_MASK), ("ClassMask", spec.DH_CLASS_MASK),
-                    ("ExcludeRace", 0), ("ExcludeClass", 0), ("MinSkillLineRank", 0),
-                    ("SupercededBySpell", 0),
-                    # AcquireMethod 2 = LEARNED_ON_SKILL_LEARN. It grants at creation and
-                    # re-grants at every login via _LoadSkills -> learnSkillRewardedSpells
-                    # (Player.cpp:14081) with NO level test anywhere in that path. Correct for
-                    # a level-1 ability, and a bug for any other -- a level-40 ability carrying
-                    # it would be in the spellbook at level 1.
-                    ("AcquireMethod", 2 if ability.level == 1 else 0),
-                    ("TrivialSkillLineRankHigh", 0), ("TrivialSkillLineRankLow", 0),
-                    ("CharacterPoints_1", 0), ("CharacterPoints_2", 0)):
-                sla.set_i32(srow, st.index_of[col], val)
+                # Cells the Death Knight and the first Demon Hunter never needed. Written only
+                # when non-zero: setting them unconditionally would zero a perfectly good
+                # Mechanic or ProcTypeMask that arrived with a transplanted record.
+                if ability.mechanic:
+                    cells["Mechanic"] = ability.mechanic
+                if ability.target_aura_state:
+                    cells["TargetAuraState"] = ability.target_aura_state
+                if ability.stack_amount:
+                    cells["CumulativeAura"] = ability.stack_amount
+                if ability.proc_flags:
+                    cells["ProcTypeMask"] = ability.proc_flags
 
-            emitted.append((ability, sid, slid))
+                for col, val in cells.items():
+                    if col not in t.index_of:
+                        checks.expect(False, "#28",
+                                      f"{ability.name}: {col!r} is not a Spell.dbc column")
+                        continue
+                    ci = t.index_of[col]
+                    if t.kind(ci) == KIND_STRING:
+                        d.set_str(row, ci, val)
+                    elif t.kind(ci) == KIND_FLOAT:
+                        d.set_f32(row, ci, float(val))
+                    else:
+                        d.set_i32(row, ci, int(val))
+
+                # THE RANGE GATE. SpellMgr.cpp:3039 ASSERTs on an effect above
+                # TOTAL_SPELL_EFFECTS or an aura above TOTAL_AURAS, so a single transplanted
+                # cell carrying one of Ascension's private effects (175, 183) or auras (317,
+                # 353, 354) is not a wrong number -- it is a worldserver that will not boot.
+                # Checked on the way out, after every override, because an override is exactly
+                # how such a cell is meant to be repaired.
+                for k in (1, 2, 3):
+                    eff = d.get_i32(row, t.index_of[f"Effect_{k}"])
+                    aur = d.get_i32(row, t.index_of[f"EffectAura_{k}"])
+                    checks.expect(eff <= MAX_SPELL_EFFECT, "#65",
+                                  f"{ability.name} rank {r + 1}: Effect_{k} is {eff}, above "
+                                  f"this core's TOTAL_SPELL_EFFECTS ({MAX_SPELL_EFFECT}) -- "
+                                  f"the worldserver would assert on load")
+                    checks.expect(aur <= MAX_SPELL_AURA, "#66",
+                                  f"{ability.name} rank {r + 1}: EffectAura_{k} is {aur}, above "
+                                  f"this core's TOTAL_AURAS ({MAX_SPELL_AURA})")
+
+                # Blank every non-enUS locale slot. The clone carries the DONOR's, so a deDE
+                # client would render the donor's German name -- worse than an empty string,
+                # which the client falls back to enUS for.
+                for col in t.columns:
+                    if "_Lang_" in col and not col.endswith(("_Mask", "_enUS")):
+                        d.set_str(row, t.index_of[col], "")
+
+                slid = spec.sla_id_for(sid)
+                srow = sla.clone_row(0)
+                for col, val in (
+                        ("ID", slid), ("SkillLine", spec.PRIMARY_SKILL_LINE), ("Spell", sid),
+                        ("RaceMask", spec.DH_RACE_MASK), ("ClassMask", spec.DH_CLASS_MASK),
+                        ("ExcludeRace", 0), ("ExcludeClass", 0), ("MinSkillLineRank", 0),
+                        # Filled in below, once every rank of this ability has an id.
+                        ("SupercededBySpell", 0),
+                        # AcquireMethod 2 = LEARNED_ON_SKILL_LEARN. It grants at creation and
+                        # re-grants at every login via _LoadSkills -> learnSkillRewardedSpells
+                        # (Player.cpp:14081) with NO level test anywhere in that path. Correct
+                        # for a level-1 rank, and a bug for any other -- a level-40 rank
+                        # carrying it would be in the spellbook at level 1.
+                        ("AcquireMethod", 2 if levels[r] == 1 else 0),
+                        ("TrivialSkillLineRankHigh", 0), ("TrivialSkillLineRankLow", 0),
+                        ("CharacterPoints_1", 0), ("CharacterPoints_2", 0)):
+                    sla.set_i32(srow, st.index_of[col], val)
+
+                emitted_ranks.append((r, sid, slid, srow))
+                emitted.append((ability, sid, slid))
+
+            # SUPERSEDING. Without this every rank stays in the spellbook at once: the client
+            # hides a superseded rank purely on this column (SkillLineAbility.SupercededBySpell),
+            # and the server's Player::addSpell uses it to remove the lower rank on learn. A
+            # ladder with the column left at 0 is eight Twin Slice buttons on one action bar.
+            for i in range(len(emitted_ranks) - 1):
+                _r, _sid, _slid, srow = emitted_ranks[i]
+                sla.set_i32(srow, st.index_of["SupercededBySpell"], emitted_ranks[i + 1][1])
+            if len(emitted_ranks) > 1:
+                self.rank_chains.append(
+                    (ability.key, tuple(s for _r, s, _l, _w in emitted_ranks)))
 
         # SECOND RECORDS. `Ability.second_record` names the spell an ability triggers -- the
         # arrival damage of a dash, the periodic tick of an area aura, the off-hand half of a
@@ -690,17 +918,42 @@ class Plan:
         # Emitted from dh_donors.DONORS rather than from the ABILITIES loop because they are
         # not abilities; they have no level, no cost and no skill line.
         second = []
-        for key in sorted({a.second_record for a in spec.ABILITIES if a.second_record}):
+        # Every triggered half named by any ability, via triggered_halves() so that both
+        # spellings are honoured -- `second_record` for the Death Knight-era single, and
+        # `second_records` for an ability like Twin Slice that fires a main-hand AND an off-hand
+        # record and cannot be expressed with one.
+        wanted = sorted({k for a in spec.ABILITIES for k in a.triggered_halves()})
+        for key in wanted:
             sid = spec.spell_id_for(key, 0)
+            # A second record is transplanted the same way an ability is when the spec names a
+            # source for it; dh_donors is the fallback for the hand-built kit. Checked in that
+            # order because an imported record is strictly better information than a donor.
+            src_id = getattr(spec, "SECOND_SOURCES", {}).get(key)
             donor = dh_donors.DONORS.get(key)
+            if donor is None and src_id is not None:
+                # Any row will do as the base: the transplant overwrites all 234 cells. Row 0 is
+                # used rather than a chosen donor so that a missing donor entry is not fatal for
+                # an imported record, which does not need one.
+                donor = d.get_i32(0, t.index_of["ID"])
             if not checks.expect(donor is not None, "#33",
-                                 f"second record {key!r} has a donor in dh_donors.DONORS"):
+                                 f"second record {key!r} has a donor in dh_donors.DONORS or a "
+                                 f"source in dh_spec.SECOND_SOURCES"):
                 continue
             if not checks.expect(donor in idx, "#34",
                                  f"{key}: donor {donor} exists in Spell.dbc"):
                 continue
             row = d.clone_row(idx[donor])
-            cells = dict(dh_donors.ALWAYS)
+            cells = {}
+            if src_id is not None:
+                asc = self._ascension(checks)
+                if asc is not None and checks.expect(
+                        src_id in asc, "#68",
+                        f"second record {key!r}: source spell {src_id} exists in the Ascension "
+                        f"client"):
+                    cells.update(asc.cells(src_id))
+                    cells.pop("ID", None)
+                    self.source_map[src_id] = sid
+            cells.update(dh_donors.ALWAYS)
             cells.update(dh_donors.OVERRIDES.get(key, {}))
             # BaseLevel and the NAME come from the PARENT ability, not from the donor.
             #
@@ -1359,6 +1612,35 @@ DELETE FROM `skilllineability_dbc` WHERE `ID` IN ({", ".join(str(s) for s, _sp, 
 {insert_rows('skilllineability_dbc', list(stt.columns), srows)}
 """)
 
+    # spell_ranks. NOT a DBC override -- a real world-DB table, loaded by
+    # SpellMgr::LoadSpellRanks (SpellMgr.cpp:1287) as
+    #     SELECT first_spell_id, spell_id, rank FROM spell_ranks ORDER BY first_spell_id, rank
+    # and it is what makes the core understand that eight records are one ability. Without it:
+    # Player::removeSpell never drops the lower rank on learn, SpellMgr::GetFirstSpellInChain
+    # returns the rank itself so every talent spell-mask lookup misses the other seven, and
+    # SpellMgr::IsRankedSpellNonStackableInSpellBook cannot hide the duplicates.
+    #
+    # The loader ERRORS on a chain of length 1, so single-rank abilities must not appear here.
+    # That is why this is driven off plan.rank_chains, which build_spells only appends to when
+    # an ability actually emitted more than one record.
+    chains = getattr(plan, "rank_chains", [])
+    if chains:
+        rank_rows = []
+        for _key, ids in chains:
+            first = ids[0]
+            for n, sid in enumerate(ids, start=1):
+                rank_rows.append([first, sid, n])
+        firsts = ", ".join(str(ids[0]) for _k, ids in chains)
+        out.append(f"""
+-- spell_ranks: {len(chains)} ladder(s), {len(rank_rows)} rank(s).
+--
+-- Deleted by first_spell_id rather than by range: this table is shared with every other
+-- feature on the realm and a range delete would take out any ladder that happened to sit
+-- between our lowest and highest id.
+DELETE FROM `spell_ranks` WHERE `first_spell_id` IN ({firsts});
+{insert_rows('spell_ranks', ['first_spell_id', 'spell_id', 'rank'], rank_rows)}
+""")
+
     # The count that must match, asserted rather than assumed: every Demon Hunter record in the
     # client's Spell.dbc has a spell_dbc row, and vice versa.
     in_dbc = sorted(i for i in d.ids()
@@ -1706,15 +1988,32 @@ def sync_addon_spell_ids(checks):
                          f"the addon is where the generator expects it "
                          f"({os.path.relpath(path, spec.REPO_ROOT)})"):
         return
-    want = {"DH_SPELL_DOUBLE_JUMP": spec.single_spell_id("double_jump"),
-            "DH_SPELL_GLIDE": spec.single_spell_id("glide")}
+    # WHICH IDS THE ADDON NEEDS IS A PROPERTY OF THE CLASS, not of this function.
+    #
+    # The Demon Hunter needed two: Double Jump and Glide, because its addon bound them to keys
+    # and had to cast them by numeric id. Felsworn has neither -- it has no movement toys at all
+    # -- and instead needs the ids the UI has to WATCH: the Felfury stack aura, so the resource
+    # can be drawn, and Inner Demon, so the form can be. An id the addon does not declare is
+    # skipped rather than failed, so the same generator serves a class whose addon is smaller.
+    want = {}
+    for lua_name, key in (("FS_SPELL_FELFURY", "felfury"),
+                          ("FS_SPELL_INNER_DEMON", "inner_demon"),
+                          ("DH_SPELL_DOUBLE_JUMP", "double_jump"),
+                          ("DH_SPELL_GLIDE", "glide")):
+        try:
+            want[lua_name] = (spec.spell_id_for(key, 0) if key in spec.ABILITY_BLOCKS
+                              else spec.single_spell_id(key))
+        except (KeyError, ValueError):
+            continue      # this class does not have that ability; nothing to sync
     text = open(path, encoding="utf-8").read()
     out = text
     for name, sid in want.items():
         pat = re.compile(rf"^(local {name}\s*=\s*)(\d+)(.*)$", re.M)
         m = pat.search(out)
-        if not checks.expect(m is not None, "#52",
-                             f"Movement.lua declares {name}"):
+        if m is None:
+            # Declared in the spec but not in the addon. A skip, not a failure: the two halves
+            # of a class can legitimately disagree about which ids the UI cares about.
+            checks.skip("#52", f"the addon does not declare {name}; nothing to sync")
             continue
         out = pat.sub(rf"\g<1>{sid}"
                       + "      -- GENERATED from dh_spec.SINGLES_ORDER; do not edit", out, count=1)
@@ -1767,6 +2066,9 @@ def do_emit(args, checks):
     plan.build_talent_tabs()
     plan.build_spells(checks)
     plan.build_talents(checks)
+    # Last, and it must be last: a transplanted record can reference another record that did
+    # not exist yet when it was itself built, so this cannot run inside either builder.
+    plan.remap_source_references(checks)
 
     print(f"\n== SQL -> {os.path.relpath(spec.SQL_DIR, spec.REPO_ROOT)}")
     sql_paths = [

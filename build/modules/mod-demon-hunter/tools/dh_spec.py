@@ -176,6 +176,15 @@ DBC_BY_SQL_NAME = {t.sql_table: t for t in DBC_TABLES if t.sql_table}
 
 SPELL_ID_MIN = 80865          # inclusive, must be > stock Spell.dbc max ID
 SPELL_ID_MAX = 100000         # exclusive, AC's serverside band begins at 100001
+# WHERE IMPORTED RECORDS COME FROM.
+#
+# An installed Ascension client. Only abilities carrying `Ability.source` read it, and a
+# checkout without one still builds every donor-based ability -- the generator degrades to a
+# SKIP rather than a failure, so this path being wrong is loud but not fatal.
+ASCENSION_CLIENT_DATA = os.environ.get(
+    "ASCENSION_CLIENT_DATA",
+    "/mnt/ntfs2t/Ascension/Launcher/resources/ascension-live/Data")
+
 SPELL_ID_BASE = 91000         # abilities
 TALENT_SPELL_ID_BASE = 92000  # talent ranks
 TALENT_SPELL_ID_MAX = 93000
@@ -186,59 +195,10 @@ IDS_PER_ABILITY = 20
 # Fixed now so IDs never move, in progression order. A block that is reserved and vacant stays
 # reserved and vacant forever -- reusing one would silently repoint a spell that some character
 # already has in `character_spell`.
-ABILITY_BLOCKS = {
-    "demons_bite":      0,     # 91000-91019   the Fury builder
-    "chaos_strike":     1,     # 91020-91039   the Fury spender
-    "fel_rush":         2,     # 91040-91059   forward dash
-    "throw_glaive":     3,     # 91060-91079   ranged, chains
-    "immolation_aura":  4,     # 91080-91099   pulsing fire aura
-    "blade_dance":      5,     # 91100-91119   PBAoE
-    "fiery_brand":      6,     # 91120-91139   fire DoT + damage taken reduction
-    "sigil_of_flame":   7,     # 91140-91159   delayed ground AoE
-    "soul_cleave":      8,     # 91160-91179   cleave + self heal
-    "eye_beam":         9,     # 91180-91199   channelled cone
-    # ---- 10-19: SECOND RECORDS. Nobody learns any of these.
-    #
-    # A dual-wield strike whose main-hand half triggers an off-hand half needs a second spell to
-    # carry the off-hand damage (the Death Knight's Threat of Thassarian mirrors are the same
-    # shape), and every ability that damages on arrival rather than on cast needs a spell for
-    # the arrival. `Ability.second_record` names one of these, and the generator asserts the
-    # name resolves -- it did not, the first time, for exactly the two below.
-    "demons_bite_oh":        10,    # 91200-91219
-    "chaos_strike_oh":       11,    # 91220-91239
-    "blade_dance_oh":        12,    # 91240-91259
-    "immolation_tick":       13,    # 91260-91279
-    "eye_beam_tick":         14,    # 91280-91299
-    "fel_rush_impact":       15,    # 91300-91319   what the dash damages on the way through
-    "infernal_strike_impact": 16,   # 91320-91339   the eruption on landing
-    # ---- 25: THE ONE-ROW CUSTOMS.
-    #
-    # Everything whose value is a percentage, a duration or a distance rather than a damage
-    # number, so it never re-ranks. One block, one row each, ordered by SINGLES_ORDER.
-    #
-    # Deliberately at 25 and not at 17: second records are the thing most likely to be added
-    # later (any new ability with an arrival effect needs one), and a block whose index is "one
-    # past however many mirrors exist today" is a block that moves. Moving it would silently
-    # repoint a spell some character already has in `character_spell`. Six spare blocks sit
-    # between the two groups for that reason.
-    "singles":               25,    # 91500-91519
-}
-
-# One row each, inside the "singles" block, in this order. Appending is safe; reordering is not.
-SINGLES_ORDER = (
-    "double_jump",          # 91500  pure vertical impulse, no GCD
-    "glide",                # 91501  feather fall + forward momentum
-    "vengeful_retreat",     # 91502  backward leap
-    "spectral_sight",       # 91503  see stealth/invis
-    "consume_magic",        # 91504  offensive dispel
-    "blur",                 # 91505  dodge + damage reduction
-    "chaos_nova",           # 91506  PBAoE stun
-    "torment",              # 91507  taunt
-    "metamorphosis",        # 91508  demon form
-    "imprison",             # 91509  incapacitate
-    "darkness",             # 91510  ground zone, allies take less damage
-    "infernal_strike",      # 91511  reticle leap + AoE on landing
-)
+# ABILITY_BLOCKS and SINGLES_ORDER now live in fs_abilities.py, imported at the bottom of this
+# file with ABILITIES itself. They were moved together on purpose: the block table, the singles
+# order and the ladder are one fact split three ways, and keeping the id allocation in a
+# different file from the abilities it allocates for is how a block ends up owned by nothing.
 
 
 def spell_id_for(ability_key, rank_index):
@@ -291,11 +251,11 @@ CHRCLASS_ROW = {
     # points at "PET", the token nine of the ten stock classes use. Writing it would mean
     # writing an integer offset into a file we are also appending strings to, for no gain: a
     # Demon Hunter has no pet and the token is only ever read to label a pet frame.
-    "Name_Lang_enUS": "Demon Hunter",
+    "Name_Lang_enUS": "Felsworn",
     # THE CLASS TOKEN. `FillLocalizedClassList` and `UnitClass()` return it, and FrameXML and
     # GlueXML both key CLASS_ICON_TCOORDS / RAID_CLASS_COLORS on it. It must match the key the
     # patched Constants.lua and CharacterCreate.lua add, exactly, including case.
-    "Filename": "DEMONHUNTER",
+    "Filename": "FELSWORN",
     # SPELLFAMILY_UNK2.
     #
     # A family is not cosmetic. It is the entire mechanism by which an authored talent modifies
@@ -396,9 +356,9 @@ OUTFIT_KEY_COLUMNS = ("RaceID", "ClassID", "SexID", "OutfitID")
 # what makes the spellbook tabs read correctly.
 SKILL_LINE_BASE = 800
 SKILL_LINES = (
-    (SKILL_LINE_BASE + 0, "Havoc"),
-    (SKILL_LINE_BASE + 1, "Vengeance"),
-    (SKILL_LINE_BASE + 2, "Illidari"),
+    (SKILL_LINE_BASE + 0, "Demonology"),
+    (SKILL_LINE_BASE + 1, "Slaying"),
+    (SKILL_LINE_BASE + 2, "Felblood"),
 )
 # Which skill line each ability's SkillLineAbility rows point at. Abilities not listed default
 # to the first line.
@@ -580,7 +540,7 @@ CREATE_SKILL_RCI = (
 # whose ladder starts at level 1, or a new character gets a button for a spell they do not have
 # -- which renders as a blank slot rather than an error, i.e. it fails silently. Asserted by the
 # generator against the ladder rather than trusted from this tuple.
-STARTING_BAR_ABILITIES = ("demons_bite",)
+STARTING_BAR_ABILITIES = ("twin_slice", "sargeron_smite")
 
 # ------------------------------------------------------------------------------- talents --
 #
@@ -598,9 +558,9 @@ TALENT_ID_BASE = 2300
 # a fourth. BackgroundFile names an existing texture under Interface\TalentFrame; a name with
 # no texture behind it renders as a blank panel, so these reuse real ones.
 TALENT_TABS = (
-    (TALENT_TAB_ID_BASE + 0, "Havoc",     0, "RogueCombat"),
-    (TALENT_TAB_ID_BASE + 1, "Vengeance", 1, "WarriorProtection"),
-    (TALENT_TAB_ID_BASE + 2, "Illidari",  2, "RogueSubtlety"),
+    (TALENT_TAB_ID_BASE + 0, "Demonology", 0, "WarriorArms"),
+    (TALENT_TAB_ID_BASE + 1, "Slaying",    1, "RogueAssassination"),
+    (TALENT_TAB_ID_BASE + 2, "Felblood",   2, "WarlockDestruction"),
 )
 
 # --------------------------------------------------------------------------- demon form --
@@ -612,8 +572,23 @@ TALENT_TABS = (
 # The Demon Hunter takes 23 rather than reusing 22 for one reason: form 22 is the Warlock's, and
 # entering it is what the Warlock's own form-gated passives key off. Taking a blank slot means
 # nothing else in the game has an opinion about being in it.
+# THE RESOURCE, and the one number the form is priced in.
+#
+# Felfury is NOT a power type -- Ascension's own 800058 describes itself as "Represents your
+# Felfury charges" and is a stacking self-aura whose three haste effects all carry
+# EffectBasePoints -1, i.e. amount ZERO. They are inert carriers that a talent later fills in.
+# There is exactly one DisplayPower per class and it is Energy; a second bar is not reachable
+# without client work.
+#
+# Both values are emitted into dh_progression.h and read by the module, so they are declared
+# here rather than in the C++: the cap has to agree with the CumulativeAura cell the generator
+# writes onto the aura record, and a header constant that disagrees with the data is the
+# failure this file exists to prevent.
+FELFURY_MAX_STACKS = 5
+INNER_DEMON_MS_PER_FELFURY = 5000
+
 SHAPESHIFT_FORM_ID = 23
-SHAPESHIFT_FORM_NAME = "Metamorphosis"
+SHAPESHIFT_FORM_NAME = "Inner Demon"
 
 # Illidan Stormrage, The Betrayer -- creature 22917's display, read from creature_template_model
 # on the live realm. Wings, horns, blindfold, warglaives: the demon-hunter silhouette. It is a
@@ -849,6 +824,61 @@ class Ability:
     second_record: Optional[str] = None   # ability key of the triggered half, if any
     note: str = ""                        # why this donor, in one line
 
+    # ---- IMPORTED ABILITIES -----------------------------------------------------------------
+    #
+    # `source` names a spell in an ALREADY-BUILT third-party 3.3.5a Spell.dbc whose whole
+    # 234-cell record is transplanted, instead of `donor` being cloned and hand-overridden.
+    # The two mechanisms are mutually exclusive per ability and the generator asserts it.
+    #
+    # It is a better starting point than any donor when it exists, because a donor is only ever
+    # a shape that RESEMBLES the ability -- its value is in the ~222 cells nobody names -- while
+    # an imported record IS the ability, including the cells no one thought to name. `donor` is
+    # still required alongside it: it supplies the row that gets cloned before the import
+    # overwrites it, so a failed import degrades to the old behaviour instead of to a blank row.
+    #
+    # `source_ranks` is the rest of the ladder in ascending rank order, EXCLUDING `source`
+    # itself, so `len(source_ranks) + 1 == ranks`. Each is transplanted the same way and the
+    # levels come from `rank_levels`.
+    source: Optional[int] = None
+    source_ranks: Tuple[int, ...] = ()
+    rank_levels: Tuple[int, ...] = ()     # learn level per rank; rank_levels[0] must == level
+
+    # ---- CELLS THE DEMON HUNTER NEVER NEEDED ------------------------------------------------
+    #
+    # Each of these is a real Spell.dbc column that the first class left at its donor's value
+    # because nothing in that kit cared. An imported kit does care, and every one of them is a
+    # cell rather than code -- which is the whole reason they are listed here and not in C++.
+    #
+    #   mechanic          The ONLY diminishing-returns input for a family the core does not
+    #                     know. SpellMgr.cpp:107-263 keys DR off Mechanic, so a snare or fear
+    #                     with Mechanic 0 is undiminished and therefore a PvP bug.
+    #   target_aura_state Free conditional casting: "only below 35% health" is state 13 and
+    #                     "only above 75%" is 23, both checked by SpellInfo.cpp:1824.
+    #   stack_amount      CumulativeAura. What caps Felfury at five without a line of code.
+    #   proc_flags        ProcTypeMask. Non-zero makes SpellMgr.cpp:2160+ synthesise a proc
+    #                     entry from the record alone, so a passive can proc with no spell_proc
+    #                     row at all.
+    #   ap_bonus/sp_bonus spell_bonus_data. Ascension keeps these in description text and in a
+    #                     float column; the core needs them in a table or the ability does not
+    #                     scale with gear at all.
+    mechanic: int = 0
+    target_aura_state: int = 0
+    stack_amount: int = 0
+    proc_flags: int = 0
+    ap_bonus: float = 0.0
+    sp_bonus: float = 0.0
+
+    # Supersedes `second_record` for abilities that need more than one triggered half -- Twin
+    # Slice fires a main-hand AND an off-hand record. `second_record` is kept so the Death
+    # Knight-era entries still parse; the generator reads them as a single-element tuple.
+    second_records: Tuple[str, ...] = ()
+
+    def triggered_halves(self):
+        """Every triggered-half ability key, from either spelling of the field."""
+        if self.second_records:
+            return tuple(self.second_records)
+        return (self.second_record,) if self.second_record else ()
+
 
 # The progression, level 1 to 70. Twenty-two abilities, ordered so that the class is complete
 # enough to be fun at every stage: a builder and a spender by level 2, the first movement toy at
@@ -872,128 +902,25 @@ class Ability:
 # class twice as the realm advances, and would leave nothing to look forward to at 70 and 80.
 # What it must NOT do is leave the class feeling unfinished at 60, which is why the count at
 # the current cap is 20 and not 15.
-ABILITIES = (
-    Ability("demons_bite", "Demon's Bite", 1, 63753,
-            "A quick slash that builds Fury.",
-            cost=0,
-            note="63753 Fan of Knives is family 0 and uses WEAPON_PERCENT_DAMAGE, so it is "
-                 "level-correct from one record and drags in no class bindings at all"),
-    # THE COOLDOWN IS AN ANTI-HOVER LIMIT, not a balance number.
-    #
-    # The module gates the cast on Unit::IsFalling, but "are you falling" is true for the whole
-    # descent -- it does not say "you have already used your second jump". Without a cooldown a
-    # player can re-cast every GCD-less instant on the way down, and since EffectLeapBack applies
-    # a fresh upward impulse each time (SpellEffects.cpp:5060-5072), that is not a double jump,
-    # it is flight.
-    #
-    # Two seconds is a floor chosen so that repeated casts lose net height: terminal descent is
-    # capped at 7 yd/s (MovementUtil.cpp terminalSafefallVelocity), so two seconds of falling
-    # costs far more height than one impulse returns. It is NOT tuned against play, and it is
-    # the wrong shape for the mechanic -- the right rule is "once per airborne period", which
-    # needs the module to clear a flag on landing rather than a DBC cell. Revisit once the
-    # class is playable; this is the safe version, not the correct one.
-    Ability("double_jump", "Double Jump", 1, 74608,
-            "Leap again in mid-air.",
-            cooldown_ms=2000,
-            note="74608 Jump Jets is a LEAP_BACK donor; EffectMiscValue must become 0 so the "
-                 "leap is purely vertical -- with speedXY 0, JumpTo's angle is irrelevant"),
-    Ability("chaos_strike", "Chaos Strike", 2, 63753,
-            "Spend Fury for a strike that ignores armour.",
-            cost=40,
-            note="same family-0 weapon-percent donor as Demon's Bite; the difference is the "
-                 "cost, the school and the off-hand mirror"),
-    Ability("fel_rush", "Fel Rush", 4, 64872,
-            "Dash forward, damaging everything in the path.",
-            cooldown_ms=10000, second_record="fel_rush_impact",
-            note="64872 Steam Rush is CHARGE_DEST from TARGET_DEST_CASTER_FRONT -- targetless, "
-                 "collision-safe, and the dash distance is a radius index"),
-    Ability("glide", "Glide", 6, 12438,
-            "Slow your descent and drift forward.",
-            note="12438 Slow Fall is one FEATHER_FALL effect, family 0, self-cast; the landing "
-                 "cancel comes from AuraInterruptFlags, as stock 55001 Parachute does it"),
-    Ability("throw_glaive", "Throw Glaive", 8, 31935,
-            "Hurl a glaive that bounces between targets.",
-            cost=25, cooldown_ms=9000,
-            note="31935 Avenger's Shield already chains; its Category, MaxLevel 59, shield "
-                 "requirement and paladin family all have to be stripped"),
-    Ability("immolation_aura", "Immolation Aura", 10, 50589,
-            "Burn everything around you.",
-            cooldown_ms=30000, second_record="immolation_tick",
-            note="50589 is the real Immolation Aura; its ShapeshiftMask 0x200000 locks it to "
-                 "warlock demon form and its ManaCostPct 64 would cost 64 Fury"),
-    Ability("spectral_sight", "Spectral Sight", 12, 34709,
-            "See the unseen, at the cost of speed.",
-            cooldown_ms=30000,
-            note="34709 Shadow Sight is the stock see-stealth aura with a self-debuff already "
-                 "attached"),
-    Ability("consume_magic", "Consume Magic", 14, 19505,
-            "Devour a beneficial effect from your enemy.",
-            cooldown_ms=15000,
-            note="19505 Devour Magic; keeping family 5 AND Category 12 together is what grants "
-                 "the free heal on dispel at SpellEffects.cpp:2689 -- so both are dropped"),
-    Ability("blade_dance", "Blade Dance", 16, 63753,
-            "Spin, striking everything nearby.",
-            cost=35, cooldown_ms=15000, second_record="blade_dance_oh",
-            note="the third use of 63753, this time keeping its PBAoE targeting instead of "
-                 "narrowing it to one target"),
-    Ability("vengeful_retreat", "Vengeful Retreat", 20, 781,
-            "Flip backwards out of danger.",
-            cooldown_ms=25000, family=SPELLFAMILY_HUNTER,
-            note=VENGEFUL_RETREAT_FAMILY_WHY),
-    Ability("blur", "Blur", 24, 5277,
-            "Become hard to pin down.",
-            cooldown_ms=60000,
-            note="5277 Evasion, deliberately retuned downward -- Evasion's +50% dodge is a "
-                 "rogue cooldown, not a passive-aggressive baseline for a new class"),
-    Ability("chaos_nova", "Chaos Nova", 28, 30283,
-            "Detonate chaotic energy, stunning everything close.",
-            cost=25, cooldown_ms=45000,
-            note="30283 Shadowfury; the reticle flag, the 500 ms GCD and MaxLevel 59 all go, "
-                 "and Mechanic must be set explicitly because it is the only DR input left "
-                 "once the family is one the core does not know"),
-    Ability("torment", "Torment", 32, 56222,
-            "Taunt your enemy into attacking you.",
-            cooldown_ms=8000,
-            note="56222 Dark Command; PowerType 1 (rage) has to become 3 (energy)"),
-    Ability("fiery_brand", "Fiery Brand", 36, 348,
-            "Brand your enemy; they burn, and they hurt you less.",
-            cooldown_ms=60000,
-            note="348 Immolate is the worst family drag-in in the set -- 81 warlock effects "
-                 "reference family 5 -- and carries MaxLevel 5"),
-    Ability("metamorphosis", "Metamorphosis", 40, 47241,
-            "Take demonic form.",
-            cooldown_ms=180000,
-            note="47241 Metamorphosis; EffectMiscValue_1 must move from form 22 (the warlock's) "
-                 "to form 23, or the warlock's form-gated passives ride along"),
-    Ability("imprison", "Imprison", 44, 20066,
-            "Bind an enemy in place.",
-            cost=25, cooldown_ms=45000,
-            note="20066 Repentance rather than 710 Banish: Banish is demon-and-elemental only, "
-                 "Repentance's TargetCreatureType is merely narrow and can be widened"),
-    Ability("sigil_of_flame", "Sigil of Flame", 48, 26573,
-            "Place a sigil that erupts in flame.",
-            cost=30, cooldown_ms=30000,
-            note="26573 Consecration is the ground-persisting shape; it needs the reticle flag "
-                 "added, and its Category, MaxLevel 29 and paladin family removed"),
-    Ability("soul_cleave", "Soul Cleave", 52, 63753,
-            "Cleave nearby enemies and mend yourself.",
-            cost=35,
-            note="63753 again for the damage half; the self-heal is a second effect on the "
-                 "same record rather than a triggered spell"),
-    Ability("eye_beam", "Eye Beam", 56, 1949,
-            "Unleash a beam of fel energy.",
-            cost=30, cooldown_ms=30000, second_record="eye_beam_tick",
-            note="1949 Hellfire is the channel shape; 40939 Illidari Flames supplies the cone "
-                 "tick. Hellfire's self-damage effect has to be removed, along with MaxLevel 40"),
-    Ability("darkness", "Darkness", 60, 65070,
-            "Shroud an area; allies within are harder to hit.",
-            cooldown_ms=300000,
-            note="65070 Defense Matrix is family 0 and already an ally-only ground zone"),
-    Ability("infernal_strike", "Infernal Strike", 70, 6544,
-            "Leap to a point and erupt on landing.",
-            cooldown_ms=20000, second_record="infernal_strike_impact",
-            note="6544 Heroic Leap is the reticle jump; Category 1211 would share a cooldown "
-                 "with the warrior ability and PowerType 1 has to become 3"),
+# =============================================================================================
+# THE LADDER
+# =============================================================================================
+#
+# Imported rather than written here. fs_abilities.py holds the 31 Felsworn abilities, each one
+# naming the Ascension record whose 234 cells are transplanted (Ability.source) instead of a
+# donor being cloned and hand-corrected. It is a separate module for the same reason
+# dh_talents.py is: this file is the CLASS -- ids, races, skills, tabs, the shape of things --
+# and that one is the CONTENT.
+#
+# ABILITY_BLOCKS is a Dict[str, int] there as it was here, and that shape is load-bearing:
+# spell_id_for() below indexes it by key, and dhspells.py branches on `key in ABILITY_BLOCKS`
+# to decide whether an ability owns a 20-id block or a single id.
+from fs_abilities import (                                          # noqa: E402
+    ABILITIES,
+    ABILITY_BLOCK_ORDER,
+    ABILITY_BLOCKS,
+    SECOND_SOURCES,
+    SINGLES_ORDER,
 )
 
 ABILITIES_BY_KEY = {a.key: a for a in ABILITIES}
