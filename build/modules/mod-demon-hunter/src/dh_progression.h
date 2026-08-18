@@ -36,87 +36,87 @@ struct DhGrant
 constexpr DhGrant kDhProgression[] =
 {
     {   1, 91000 },   // Twin Slice
-    {   1, 91001 },   // Twin Slice
-    {   1, 91002 },   // Twin Slice
-    {   1, 91003 },   // Twin Slice
-    {   1, 91004 },   // Twin Slice
-    {   1, 91005 },   // Twin Slice
-    {   1, 91006 },   // Twin Slice
-    {   1, 91007 },   // Twin Slice
     {   1, 91020 },   // Sargeron Smite
-    {   1, 91021 },   // Sargeron Smite
-    {   1, 91022 },   // Sargeron Smite
-    {   1, 91023 },   // Sargeron Smite
-    {   1, 91024 },   // Sargeron Smite
-    {   1, 91025 },   // Sargeron Smite
-    {   1, 91026 },   // Sargeron Smite
-    {   1, 91027 },   // Sargeron Smite
-    {   1, 91028 },   // Sargeron Smite
     {   2, 91040 },   // Fel Fireball
-    {   2, 91041 },   // Fel Fireball
-    {   2, 91042 },   // Fel Fireball
-    {   2, 91043 },   // Fel Fireball
-    {   2, 91044 },   // Fel Fireball
-    {   2, 91045 },   // Fel Fireball
-    {   2, 91046 },   // Fel Fireball
-    {   2, 91047 },   // Fel Fireball
-    {   2, 91048 },   // Fel Fireball
     {   2, 91480 },   // Inner Demon
     {   4, 91060 },   // Chaos Rush
-    {   4, 91061 },   // Chaos Rush
-    {   4, 91062 },   // Chaos Rush
+    {   6, 91001 },   // Twin Slice
+    {   6, 91041 },   // Fel Fireball
     {   6, 91500 },   // Bane of Fire
     {   8, 91080 },   // Man'ari Intuition
-    {   8, 91081 },   // Man'ari Intuition
-    {   8, 91082 },   // Man'ari Intuition
-    {   8, 91083 },   // Man'ari Intuition
-    {   8, 91084 },   // Man'ari Intuition
-    {   8, 91085 },   // Man'ari Intuition
+    {  10, 91021 },   // Sargeron Smite
     {  10, 91100 },   // Hateforged Barrier
-    {  10, 91101 },   // Hateforged Barrier
-    {  10, 91102 },   // Hateforged Barrier
-    {  10, 91103 },   // Hateforged Barrier
-    {  10, 91104 },   // Hateforged Barrier
-    {  10, 91105 },   // Hateforged Barrier
+    {  12, 91042 },   // Fel Fireball
     {  12, 91501 },   // Bane of Frailty
     {  13, 91120 },   // Felspears
-    {  13, 91121 },   // Felspears
-    {  13, 91122 },   // Felspears
-    {  13, 91123 },   // Felspears
-    {  13, 91124 },   // Felspears
-    {  13, 91125 },   // Felspears
-    {  13, 91126 },   // Felspears
-    {  13, 91127 },   // Felspears
+    {  14, 91002 },   // Twin Slice
     {  14, 91140 },   // Cripple
-    {  14, 91141 },   // Cripple
-    {  14, 91142 },   // Cripple
-    {  14, 91143 },   // Cripple
-    {  14, 91144 },   // Cripple
-    {  14, 91145 },   // Cripple
+    {  16, 91022 },   // Sargeron Smite
     {  16, 91502 },   // Betray
     {  18, 91503 },   // Skull of Gul'dan
+    {  19, 91121 },   // Felspears
+    {  20, 91043 },   // Fel Fireball
+    {  20, 91081 },   // Man'ari Intuition
+    {  20, 91101 },   // Hateforged Barrier
     {  20, 91160 },   // Manafeed
-    {  20, 91161 },   // Manafeed
-    {  20, 91162 },   // Manafeed
-    {  20, 91163 },   // Manafeed
+    {  22, 91141 },   // Cripple
     {  22, 91504 },   // Consume Magic
+    {  24, 91003 },   // Twin Slice
+    {  24, 91061 },   // Chaos Rush
     {  24, 91180 },   // Illidari Intuition
-    {  24, 91181 },   // Illidari Intuition
-    {  24, 91182 },   // Illidari Intuition
-    {  24, 91183 },   // Illidari Intuition
-    {  24, 91184 },   // Illidari Intuition
+    {  25, 91122 },   // Felspears
+    {  26, 91023 },   // Sargeron Smite
     {  26, 91505 },   // Blur
+    {  28, 91044 },   // Fel Fireball
     {  28, 91506 },   // Felbane
+    {  30, 91082 },   // Man'ari Intuition
+    {  30, 91102 },   // Hateforged Barrier
+    {  30, 91142 },   // Cripple
     {  30, 91507 },   // Bane of Betrayal
+    {  31, 91123 },   // Felspears
+    {  32, 91181 },   // Illidari Intuition
     {  32, 91508 },   // Bane of Power
+    {  34, 91004 },   // Twin Slice
+    {  34, 91024 },   // Sargeron Smite
     {  34, 91509 },   // Doomscar
+    {  36, 91045 },   // Fel Fireball
+    {  36, 91161 },   // Manafeed
     {  36, 91510 },   // Annihilation
+    {  37, 91124 },   // Felspears
+    {  38, 91143 },   // Cripple
     {  38, 91511 },   // Illidan's Guile
+    {  40, 91083 },   // Man'ari Intuition
+    {  40, 91103 },   // Hateforged Barrier
+    {  42, 91025 },   // Sargeron Smite
+    {  42, 91182 },   // Illidari Intuition
     {  42, 91512 },   // Whispers of the Pit
+    {  43, 91125 },   // Felspears
+    {  44, 91005 },   // Twin Slice
+    {  44, 91046 },   // Fel Fireball
+    {  44, 91062 },   // Chaos Rush
+    {  44, 91162 },   // Manafeed
+    {  46, 91144 },   // Cripple
     {  46, 91513 },   // Sunder
+    {  49, 91126 },   // Felspears
+    {  50, 91026 },   // Sargeron Smite
+    {  50, 91084 },   // Man'ari Intuition
+    {  50, 91104 },   // Hateforged Barrier
     {  50, 91514 },   // Blood of Mannoroth
+    {  52, 91006 },   // Twin Slice
+    {  52, 91047 },   // Fel Fireball
+    {  52, 91183 },   // Illidari Intuition
+    {  54, 91145 },   // Cripple
     {  54, 91515 },   // Greater Man'ari Intuition
+    {  55, 91127 },   // Felspears
+    {  56, 91027 },   // Sargeron Smite
+    {  56, 91163 },   // Manafeed
     {  58, 91516 },   // Reckoning
+    {  60, 91007 },   // Twin Slice
+    {  60, 91028 },   // Sargeron Smite
+    {  60, 91048 },   // Fel Fireball
+    {  60, 91085 },   // Man'ari Intuition
+    {  60, 91105 },   // Hateforged Barrier
+    {  60, 91184 },   // Illidari Intuition
     {  62, 91517 },   // Fel Eruption
     {  66, 91518 },   // Annihilation
     {  70, 91519 },   // Oblivion

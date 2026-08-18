@@ -2051,7 +2051,23 @@ def emit_header(plan, checks):
     is also no hot reload for spell data -- LoadDBCStores has exactly one call site,
     World.cpp:384 -- so nothing is gained by making it runtime-editable.
     """
-    grants = sorted(((a.level, sid, a.name) for a, sid, _l in getattr(plan, "spells", [])),
+    # PER-RANK LEVEL, not the ability's. `Ability.level` is when the ability is FIRST learned;
+    # a rank ladder's later ranks are gated by `rank_levels`, and using the ability's level for
+    # all of them hands a level-1 character rank 8 of everything -- which is exactly what
+    # shipped: a level-6 Felsworn had Twin Slice rank 8 (a level-60 record) on the action bar,
+    # because Reconcile's `if (grant.level > level) break;` never fired.
+    #
+    # Derived from the id rather than threaded through plan.spells: the rank index IS the
+    # offset within the ability's 20-id block, which is what allocated the id in the first
+    # place, so there is no second place for the two to disagree.
+    def _grant_level(ability, sid):
+        if ability.rank_levels and ability.key in spec.ABILITY_BLOCKS:
+            index = sid - spec.spell_id_for(ability.key, 0)
+            if 0 <= index < len(ability.rank_levels):
+                return ability.rank_levels[index]
+        return ability.level
+
+    grants = sorted(((_grant_level(a, sid), sid, a.name) for a, sid, _l in getattr(plan, "spells", [])),
                     key=lambda g: (g[0], g[1]))
 
     # A zero-length array is ILL-FORMED in C++ -- `constexpr DhGrant kDhProgression[] = {};`
@@ -2059,6 +2075,21 @@ def emit_header(plan, checks):
     # the image build about thirty minutes into a Docker compile, and the error names the
     # module rather than the generator that produced it. Emitting nothing is always a bug here:
     # dh_spec.ABILITIES is never legitimately empty.
+    # THE CHECK THAT WOULD HAVE CAUGHT IT. Every grant level must equal the SpellLevel on the
+    # record it grants. The module gates on the former and the client tooltip shows the latter,
+    # so a disagreement is invisible in both halves until somebody notices a level-6 character
+    # holding a level-60 rank.
+    _d = plan.dbcs["Spell.dbc"]
+    _idx = _d.index()
+    _lvl_col = _d.table.index_of["SpellLevel"]
+    for _lvl, _sid, _name in grants:
+        if _sid not in _idx:
+            continue
+        _record = _d.get_i32(_idx[_sid], _lvl_col)
+        checks.expect(_lvl == _record, "#75",
+                      f"{_name} ({_sid}): granted at level {_lvl} but its record says "
+                      f"SpellLevel {_record} -- the module would hand it out at the wrong level")
+
     if not checks.expect(bool(grants), "#32",
                          "the progression table is non-empty -- a zero-length C array does not "
                          "compile, and an empty one means the ability records were never built "
