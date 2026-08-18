@@ -79,7 +79,7 @@ capital DELTA in their comment) and their numbers are NOT re-scaled to the new l
 Ascension's own values at Ascension's level, carried across unchanged and unmeasured.
 """
 
-from dh_spec import FELFURY_MAX_STACKS, Ability, ScalingCell            # noqa: F401  -- see the docstring's last
+from dh_spec import FELFURY_MAX_STACKS, SHAPESHIFT_FORM_ID, Ability, ScalingCell            # noqa: F401  -- see the docstring's last
 
 # =============================================================================================
 # ID BLOCKS -- plan section 5
@@ -194,6 +194,19 @@ SECOND_SOURCES = {
 # entry names the semantic it is preserving, because a remap that merely makes the assert go
 # away is worse than no remap: it ships a spell whose tooltip and behaviour disagree.
 CELL_OVERRIDES = {
+    # THE FORM. 804216 arrives with EffectMiscValue 56 and it MUST become 23.
+    #
+    # Form 56 can be entered but nothing can ever gate on it: SpellInfo::Stances is a uint32
+    # (SpellInfo.h:357-358) and DBCfmt.h:110 marks the high dwords `x`, so `1 << 55` is
+    # unrepresentable. Roughly twenty talents gate on the form via ShapeshiftMask 1 << 22, and
+    # every one of them would silently never apply.
+    #
+    # Getting this wrong is worse than leaving it at 56, and it is what shipped for one deploy:
+    # with no override the DONOR's value survives, and the donor is 47241 Metamorphosis --
+    # whose form is 22, the WARLOCK's. A Felsworn would enter the warlock's demon form, the
+    # form-gated talents would still not fire, and nothing would log a word about either.
+    "inner_demon": {"EffectMiscValue_1": SHAPESHIFT_FORM_ID},
+
     # THE RESOURCE CAP, and it has to be a cell rather than a constant.
     #
     # Felfury generation has two paths. The talented one goes through the module, which can

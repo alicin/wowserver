@@ -165,10 +165,8 @@ struct DhFelfuryFlow
 // `stacks` is what the MODULE adds on top of the authored `Effect 64 -> felfury`, NOT
 // the ability's advertised total. A generator whose whole grant is data has no row here
 // and needs none: the resource aura's own ceiling is enforced when that +1 lands.
-constexpr std::array<DhFelfuryFlow, 9> kDhFelfuryGenerators =
+constexpr std::array<DhFelfuryFlow, 7> kDhFelfuryGenerators =
 {{
-    DhFelfuryFlow{ 91000, 1 },   // twin_slice -- 1 total, 0 from data
-    DhFelfuryFlow{ 91040, 1 },   // fel_fireball -- 1 total, 0 from data
     DhFelfuryFlow{ 91500, 1 },   // bane_of_fire -- 1 total, 0 from data
     DhFelfuryFlow{ 91501, 1 },   // bane_of_frailty -- 1 total, 0 from data
     DhFelfuryFlow{ 91507, 1 },   // bane_of_betrayal -- 1 total, 0 from data
