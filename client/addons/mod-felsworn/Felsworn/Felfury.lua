@@ -41,9 +41,10 @@ local FelfuryTracker = {}
 Felsworn.Felfury = FelfuryTracker
 
 -- The cap is data, not a constant this file may invent: it is CumulativeAura on the Felfury
--- record, which dh_spec.FELFURY_MAX_STACKS also feeds into the server module. Kept here only as
--- a display fallback for the frame's width before the first aura is ever seen.
-local FELFURY_DISPLAY_CAP = 5
+-- record, and the same number reaches the server module as FELFURY_MAX_STACKS. GENERATED for
+-- exactly that reason -- it was hand-written as 5, and when the pool became 6 this file went on
+-- drawing "6/5" until the generator started owning it.
+local FS_FELFURY_CAP = 6  -- GENERATED from dh_spec.FELFURY_MAX_STACKS; do not edit
 
 function FelfuryTracker:Stacks()
     if not felfuryName then
@@ -90,7 +91,7 @@ end
 function FelfuryTracker:Update()
     local f = EnsureFrame()
     local stacks = self:Stacks()
-    local cap = FELFURY_DISPLAY_CAP
+    local cap = FS_FELFURY_CAP
 
     if stacks <= 0 then
         -- Dimmed rather than hidden. A resource bar that disappears when empty makes "empty"

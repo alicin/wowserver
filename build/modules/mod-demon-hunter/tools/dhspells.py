@@ -2283,7 +2283,9 @@ def sync_addon_spell_ids(checks):
     # -- and instead needs the ids the UI has to WATCH: the Felfury stack aura, so the resource
     # can be drawn, and Inner Demon, so the form can be. An id the addon does not declare is
     # skipped rather than failed, so the same generator serves a class whose addon is smaller.
-    want = {}
+    # Not a spell id, but the same problem and the same fix: a number the addon draws that the
+    # data owns. It was hand-written as 5 and the pool later became 6.
+    want = {"FS_FELFURY_CAP": spec.FELFURY_MAX_STACKS}
     for lua_name, key in (("FS_SPELL_FELFURY", "felfury"),
                           ("FS_SPELL_INNER_DEMON", "inner_demon"),
                           ("DH_SPELL_DOUBLE_JUMP", "double_jump"),
@@ -2304,7 +2306,9 @@ def sync_addon_spell_ids(checks):
             checks.skip("#52", f"the addon does not declare {name}; nothing to sync")
             continue
         out = pat.sub(rf"\g<1>{sid}"
-                      + "  -- GENERATED from dh_spec.ABILITY_BLOCKS; do not edit", out, count=1)
+                      + ("  -- GENERATED from dh_spec.FELFURY_MAX_STACKS; do not edit"
+                         if name == "FS_FELFURY_CAP" else
+                         "  -- GENERATED from dh_spec.ABILITY_BLOCKS; do not edit"), out, count=1)
     if out != text:
         with open(path, "w", encoding="utf-8") as f:
             f.write(out)
