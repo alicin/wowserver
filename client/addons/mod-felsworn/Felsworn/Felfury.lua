@@ -76,11 +76,21 @@ local function EnsureFrame()
         return frame
     end
     frame = CreateFrame("Frame", "FelswornFelfuryFrame", UIParent)
-    frame:SetWidth(70)
-    frame:SetHeight(26)
-    -- Anchored above the player frame rather than centre-screen: it is a resource, and a
-    -- resource belongs next to the other resources.
-    frame:SetPoint("BOTTOM", PlayerFrame, "TOP", 0, -6)
+    frame:SetWidth(90)
+    frame:SetHeight(28)
+
+    -- ABOVE THE ACTION BAR, not above the player frame.
+    --
+    -- "Next to the other resources" was the first instinct and it put the frame OFF SCREEN:
+    -- PlayerFrame sits flush against the top of the UI, so anchoring BOTTOM-to-its-TOP places a
+    -- 28px frame at roughly y = -22. It rendered, it updated, and nobody could ever see it.
+    --
+    -- Bottom-centre is where WotLK itself puts a class resource that is not a bar -- Death
+    -- Knight runes and the Holy Power row both live just above the main action bar -- and it is
+    -- the one region no default frame occupies. Anchored to UIParent rather than to
+    -- MainMenuBar because a player running Bartender or Dominos has no MainMenuBar, and an
+    -- anchor to a nil frame throws rather than degrading.
+    frame:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 200)
 
     frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     frame.text:SetAllPoints(frame)
