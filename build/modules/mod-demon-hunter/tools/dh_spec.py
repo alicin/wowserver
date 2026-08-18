@@ -587,6 +587,77 @@ TALENT_TABS = (
 FELFURY_MAX_STACKS = 5
 INNER_DEMON_MS_PER_FELFURY = 5000
 
+# --------------------------------------------------------------------- the Felfury economy --
+#
+# WHY THESE FOUR TABLES ARE HERE AND NOT IN THE C++.
+#
+# Every number below is a spell id in disguise. `spell_id_for` / `single_spell_id` allocate the
+# ability ids and `build_talents` allocates the talent ids, so a table of "which spells move
+# the resource" written in C++ would be a second copy of the id plan -- exactly the drift
+# dh_spec.py exists to prevent. Declared by KEY and by talent NAME here, resolved to ids by
+# dhspells.emit_header, and emitted into dh_progression.h as `constexpr std::array`s.
+#
+# The amounts are plan section 1 and section 4 C1, which read them off Ascension's own records:
+#   generators  Twin Slice 45e, Fel Fireball 35e, Annihilan Strike 40e/+2, Felrend, the Banes,
+#               Felhoof Charge;  Burning Hatred and Blood of Mannoroth +6
+#   spenders    Sargeron Smite 0e/-2 (refunds +20e), Ruin 30e/-2, Azzinoth's Assault 20e/-2,
+#               Felwrath 30e/-2, Carve 20e/-2, Sunder 30e/-2
+#
+# A GENERATOR'S NUMBER IS ITS ADVERTISED TOTAL, and the module's share is DERIVED rather than
+# declared. `Unit::_TryStackingOrRefreshingExistingAura` (Unit.cpp:4615; the ModStackAmount(1)
+# at :4665) adds exactly ONE stack per triggered cast and there is no Spell.dbc cell anywhere
+# that says "two", so an authored `Effect_N = 64 TRIGGER_SPELL -> felfury` is worth +1 and no
+# more. emit_header COUNTS those effects on the emitted record and writes `total - counted` into
+# the header -- dropping the row entirely when that is zero, so a generator whose whole grant is
+# data costs the module nothing at run time.
+#
+# Derived and not declared because the two halves land at different times: the Effect 64 is
+# authored per-ability in fs_abilities.py (`second_records`) or inherited from the transplanted
+# Ascension record, and a hand-maintained "how much comes from data" column here would be a
+# second opinion about a cell that Spell.dbc already holds. Today only Twin Slice and Fel
+# Fireball carry one -- the rest of the tooltips' "Generates 1 Felfury" is the module's, exactly
+# as plan section 4 C1 describes ("authored on the rest" is still a TODO on the data half).
+FELFURY_ABILITY_GENERATORS = {
+    # key                    total granted per cast
+    "twin_slice":            1,
+    "fel_fireball":          1,
+    "bane_of_fire":          1,
+    "bane_of_frailty":       1,
+    "bane_of_betrayal":      1,
+    "bane_of_power":         1,
+    "blood_of_mannoroth":    6,
+}
+
+FELFURY_ABILITY_SPENDERS = {
+    "sargeron_smite": 2,
+    "sunder":         2,
+}
+
+# Talent-granted actives, keyed by the talent NAME as declared in fs_talents_*.py. Every one is
+# a one-rank `flags=1` active (plan 3.4: "actives are never ranked"), which is what lets
+# emit_header take rank 1's id without a chain walk; it asserts the rank count rather than
+# assuming it.
+FELFURY_TALENT_GENERATORS = {
+    "Annihilan Strike": 2,
+    "Burning Hatred":   6,
+}
+
+FELFURY_TALENT_SPENDERS = {
+    "Ruin":               2,
+    "Azzinoth's Assault": 2,
+    "Felwrath":           2,
+    "Carve":              2,
+}
+
+# Fel Addict (Ascension 300487/300488, +2 max Felfury per rank) and Felheart (301287, the
+# SPELLMOD_ALL_EFFECTS that turns the resource's three zero-amount haste carriers into 1% each).
+# BOTH ARE EMPTY ON PURPOSE: neither is placed in any of the three tab tables in plan 3.1-3.3,
+# so neither has a talent record and neither has an id to name. They are declared anyway because
+# the module reads both tables, and an absent name would be a compile error the day one of them
+# is placed rather than a silently missing feature.
+FEL_ADDICT_TALENTS = {}     # talent name -> how much it raises the Felfury cap
+FELHEART_TALENTS = ()       # talent names
+
 SHAPESHIFT_FORM_ID = 23
 SHAPESHIFT_FORM_NAME = "Inner Demon"
 

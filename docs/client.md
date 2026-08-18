@@ -280,7 +280,7 @@ reaches the login screen.
 
 Practical rule: **`DBFilesClient\*`, `Interface\Icons\*` and the class-icon atlases are outside both
 trees and ship freely.** Anything inside `Interface\FrameXML\` or `Interface\GlueXML\` additionally
-needs `client/tools/patch-wow-exe.py`. See [demon-hunters.md](demon-hunters.md) §2 for the
+needs `client/tools/patch-wow-exe.py`. See [felsworn.md](felsworn.md) §2 for the
 disassembly, the measurement and the twelve-byte patch.
 
 ### ChromieCraft's HD pack

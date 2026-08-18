@@ -110,3 +110,44 @@ DemonHunter.ParryLevel = 1
 DemonHunter.GrantRacials = 1
 
 #
+#
+#    Felsworn.Felfury.MaxStacks
+#        Description: The UNTALENTED Felfury cap. The pool is a stacking self-aura, not a
+#                     power type -- there is exactly one DisplayPower per class and it is
+#                     Energy -- so this is the number the module clamps against, and Fel
+#                     Addict adds to it at run time.
+#
+#                     It cannot usefully be raised above the felfury record's own
+#                     CumulativeAura cell, which tools/dh_spec.py owns and the generated
+#                     dh_progression.h reports as FELFURY_STACK_CEILING. The pure-data +1
+#                     generation path goes through Aura::ModStackAmount, which clamps against
+#                     that cell, so a larger value here would leave the pool permanently one
+#                     short of the configured cap and reachable only by the scripted
+#                     multi-grants. The module clamps this knob to the cell for that reason.
+#
+#                     0 is NOT an off position and is not honoured: a cap of zero has no
+#                     reading other than a typo, and the behaviour it would ship is an aura
+#                     that is applied, visible in the client, and holding nothing. The
+#                     module falls back to the generated default instead.
+#        Default:     5
+#
+
+Felsworn.Felfury.MaxStacks = 5
+
+#
+#    Felsworn.InnerDemon.MsPerFelfury
+#        Description: Milliseconds of Inner Demon bought by one Felfury. The form's duration
+#                     is the whole pool multiplied by this.
+#
+#                     This is a script and not a cell because Ascension supplies the number
+#                     from a +5000 ms SPELLMOD_DURATION and MULTIPLIES it by the stacks
+#                     spent. Player::ApplySpellMod accumulates flat modifiers and applies
+#                     them exactly once; there is no input to that arithmetic a stack count
+#                     can reach, so five Felfury and one Felfury would both yield +5000 ms.
+#
+#                     0 is not honoured, for the same reason as the cap above: it would ship
+#                     a form that expires on the tick it is entered, with nothing logged.
+#        Default:     5000
+#
+
+Felsworn.InnerDemon.MsPerFelfury = 5000

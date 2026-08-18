@@ -21,6 +21,14 @@ void DemonHunterConfig::Load()
     DualWieldLevel = sConfigMgr->GetOption<uint8>("DemonHunter.DualWieldLevel", 1);
     ParryLevel     = sConfigMgr->GetOption<uint8>("DemonHunter.ParryLevel", 1);
     GrantRacials   = sConfigMgr->GetOption<bool>("DemonHunter.GrantRacials", true);
+
+    // The two Felfury knobs default to the GENERATED constants, not to literals -- see the
+    // comment on DemonHunterConfig. A configured 0 is rejected at the point of use rather than
+    // here, so that `.reload config` with a typo in it still reports what the operator typed.
+    FelfuryMaxStacks       = sConfigMgr->GetOption<uint8>("Felsworn.Felfury.MaxStacks",
+                                                          FELFURY_MAX_STACKS);
+    InnerDemonMsPerFelfury = sConfigMgr->GetOption<uint32>("Felsworn.InnerDemon.MsPerFelfury",
+                                                           INNER_DEMON_MS_PER_FELFURY);
 }
 
 namespace
@@ -536,6 +544,11 @@ void demon_hunter_movement_allspellscript::OnSpellCheckCast(Spell* spell, bool /
     if (!spell)
         return;
 
+    // The Felfury cost gate (felfury_core.cpp), FIRST, because the Double Jump / Glide test
+    // below returns early for everything that is not one of those two ids. Both gates share one
+    // `res` and neither overwrites a refusal already in it.
+    Felsworn::GateFelfurySpender(spell, res);
+
     // Cheapest test first: two integer compares reject every other cast on the realm, and this
     // hook runs on every cast by every player and every bot.
     uint32 const spellId = spell->GetSpellInfo()->Id;
@@ -588,12 +601,17 @@ void demon_hunter_worldscript::OnAfterConfigLoad(bool /*reload*/)
     //
     // The uint8s are widened to uint32 on purpose: fmt would be entitled to render a narrow char
     // type as a character, and "ParryLevel=\x01" is not a useful log line.
-    LOG_INFO("server.loading", "mod-demon-hunter: Enable={} DualWieldLevel={} ParryLevel={} GrantRacials={} grants={}",
+    LOG_INFO("server.loading",
+        "mod-demon-hunter: Enable={} DualWieldLevel={} ParryLevel={} GrantRacials={} grants={} "
+        "FelfuryMaxStacks={} (ceiling {}) InnerDemonMsPerFelfury={}",
         enabled,
         uint32(sDemonHunterConfig.DualWieldLevel),
         uint32(sDemonHunterConfig.ParryLevel),
         sDemonHunterConfig.GrantRacials,
-        uint32(std::size(kDhProgression)));
+        uint32(std::size(kDhProgression)),
+        uint32(sDemonHunterConfig.FelfuryMaxStacks),
+        uint32(FELFURY_STACK_CEILING),
+        sDemonHunterConfig.InnerDemonMsPerFelfury);
 
     if (!enabled)
         return;
@@ -622,4 +640,11 @@ void AddSC_demon_hunter()
     new demon_hunter_worldscript();
     new demon_hunter_playerscript();
     new demon_hunter_movement_allspellscript();
+
+    // The other two translation units, in dependency order. Neither registers the AllSpellScript
+    // above a second time -- felfury_core.cpp only adds two of its overrides, and a second
+    // registration would put it twice in every dispatch list it is enabled for, making every
+    // Felfury debit happen twice. See demon_hunter.h.
+    AddSC_felsworn_felfury();
+    AddSC_felsworn_spells();
 }

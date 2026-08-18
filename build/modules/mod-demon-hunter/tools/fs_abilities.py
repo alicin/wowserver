@@ -79,7 +79,7 @@ capital DELTA in their comment) and their numbers are NOT re-scaled to the new l
 Ascension's own values at Ascension's level, carried across unchanged and unmeasured.
 """
 
-from dh_spec import Ability, ScalingCell            # noqa: F401  -- see the docstring's last
+from dh_spec import FELFURY_MAX_STACKS, Ability, ScalingCell            # noqa: F401  -- see the docstring's last
 
 # =============================================================================================
 # ID BLOCKS -- plan section 5
@@ -194,6 +194,20 @@ SECOND_SOURCES = {
 # entry names the semantic it is preserving, because a remap that merely makes the assert go
 # away is worse than no remap: it ships a spell whose tooltip and behaviour disagree.
 CELL_OVERRIDES = {
+    # THE RESOURCE CAP, and it has to be a cell rather than a constant.
+    #
+    # Felfury generation has two paths. The talented one goes through the module, which can
+    # clamp to anything it likes; the pure-data one is an authored `Effect = TRIGGER_SPELL ->
+    # felfury` on the generators, and that path is clamped by Aura::ModStackAmount against this
+    # column and nothing else (SpellAuras.cpp:973-980). Ascension ships 0 here because their
+    # engine caps the pool in code, so the transplant brings 0 across and the pool would hold
+    # exactly one charge forever -- a resource with no resource in it.
+    #
+    # dh_spec.FELFURY_MAX_STACKS feeds the module and the conf; this feeds the data. The
+    # generator asserts the two agree rather than letting either be the single source of a
+    # number the other also depends on.
+    "felfury": {"CumulativeAura": FELFURY_MAX_STACKS},
+
     # Aura 330 is Ascension's "chance to be critically struck by school X from the caster".
     # 179 SPELL_AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE is an exact semantic match and takes the
     # school mask in EffectMiscValue, which the imported cell already holds -- so only the aura

@@ -21,6 +21,8 @@
 
 #include "Define.h"
 
+#include <array>
+
 // NOT DkGrant. Two statically-linked modules defining different structs with the same name is
 // an ODR violation: it links without a diagnostic and misbehaves at run time.
 struct DhGrant
@@ -119,5 +121,82 @@ constexpr DhGrant kDhProgression[] =
     {  66, 91518 },   // Annihilation
     {  70, 91519 },   // Oblivion
 };
+
+// =============================================================================================
+// THE FELFURY RESOURCE -- read by src/felfury_core.cpp
+// =============================================================================================
+//
+// Declared in tools/dh_spec.py and resolved to ids here, so that "which spells move the
+// resource" is one fact in one place. See the comment above dh_spec.FELFURY_ABILITY_GENERATORS.
+
+// The band every Felsworn spell id falls in, used as the cheap first test on hooks that run for
+// every cast and every aura application on the realm. MAX is EXCLUSIVE.
+constexpr uint32 FELSWORN_SPELL_ID_MIN = 91000;
+constexpr uint32 FELSWORN_SPELL_ID_MAX = 93000;
+
+constexpr uint32 FELFURY_SPELL_ID     = 91460;   // the resource itself
+constexpr uint32 INNER_DEMON_SPELL_ID = 91480;   // the form it is spent on
+
+// The untalented cap the module enforces in code, and the CumulativeAura cell on the felfury
+// record -- which must be the FULLY TALENTED maximum, because the pure-data +1 goes through
+// Aura::ModStackAmount and clamps against it (SpellAuras.cpp:973-980).
+constexpr uint8  FELFURY_MAX_STACKS    = 5;
+constexpr uint8  FELFURY_STACK_CEILING = 5;
+
+// Milliseconds of Inner Demon bought by one Felfury. Ascension multiplies 803465's +5000 ms
+// SPELLMOD_DURATION by the stacks spent; Player::ApplySpellMod adds a flat mod exactly once and
+// never scales it by a stack count (Player.cpp:10077-10078), so the multiply is script.
+constexpr uint32 INNER_DEMON_MS_PER_FELFURY = 5000;
+
+// `spellId` is the RANK 1 id of a chain; the module maps any rank back to it with
+// SpellMgr::GetFirstSpellInChain (SpellMgr.cpp:603-609), which is why one row covers all nine
+// ranks of Sargeron Smite. std::array and not a C array because a table can legitimately be
+// EMPTY, and `constexpr DhFelfuryFlow kDhFelAddictRanks[] = {};` is ill-formed C++.
+//
+// The Dh prefix is not decoration: mod-dk-lowlevel is statically linked into the same
+// worldserver binary, and two modules defining different types under one name is an ODR
+// violation that links without a diagnostic.
+struct DhFelfuryFlow
+{
+    uint32 spellId;
+    uint8  stacks;
+};
+
+// `stacks` is what the MODULE adds on top of the authored `Effect 64 -> felfury`, NOT
+// the ability's advertised total. A generator whose whole grant is data has no row here
+// and needs none: the resource aura's own ceiling is enforced when that +1 lands.
+constexpr std::array<DhFelfuryFlow, 9> kDhFelfuryGenerators =
+{{
+    DhFelfuryFlow{ 91000, 1 },   // twin_slice -- 1 total, 0 from data
+    DhFelfuryFlow{ 91040, 1 },   // fel_fireball -- 1 total, 0 from data
+    DhFelfuryFlow{ 91500, 1 },   // bane_of_fire -- 1 total, 0 from data
+    DhFelfuryFlow{ 91501, 1 },   // bane_of_frailty -- 1 total, 0 from data
+    DhFelfuryFlow{ 91507, 1 },   // bane_of_betrayal -- 1 total, 0 from data
+    DhFelfuryFlow{ 91508, 1 },   // bane_of_power -- 1 total, 0 from data
+    DhFelfuryFlow{ 91514, 6 },   // blood_of_mannoroth -- 6 total, 0 from data
+    DhFelfuryFlow{ 92038, 6 },   // Burning Hatred -- 6 total, 0 from data
+    DhFelfuryFlow{ 92100, 2 },   // Annihilan Strike -- 2 total, 0 from data
+}};
+
+// `stacks` is the cost. Inner Demon is deliberately absent -- it eats the whole pool,
+// which is not a cell, and a row here would debit it twice.
+constexpr std::array<DhFelfuryFlow, 6> kDhFelfurySpenders =
+{{
+    DhFelfuryFlow{ 91020, 2 },   // sargeron_smite -- 2 per cast
+    DhFelfuryFlow{ 91513, 2 },   // sunder -- 2 per cast
+    DhFelfuryFlow{ 92015, 2 },   // Carve -- 2 per cast
+    DhFelfuryFlow{ 92084, 2 },   // Azzinoth's Assault -- 2 per cast
+    DhFelfuryFlow{ 92149, 2 },   // Ruin -- 2 per cast
+    DhFelfuryFlow{ 92166, 2 },   // Felwrath -- 2 per cast
+}};
+
+// `stacks` is how much the talent raises the cap. Ascension's own aura 107 carries
+// SpellModOp 31, which does not exist here (MAX_SPELLMOD is 32, SpellDefines.h:109), so
+// the cap has to be arithmetic in the module rather than a spell mod.
+constexpr std::array<DhFelfuryFlow, 0> kDhFelAddictRanks = {};
+
+// Felheart's SPELLMOD_ALL_EFFECTS is what raises the resource's three zero-amount haste
+// carriers to 1% each. The module recomputes the aura when one of these is learnt or unlearnt.
+constexpr std::array<uint32, 0> kDhFelheartRanks = {};
 
 #endif // MOD_DEMON_HUNTER_DH_PROGRESSION_H

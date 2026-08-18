@@ -16,13 +16,13 @@ lives elsewhere and is not repeated:
 | The four databases, first boot, accounts, GM levels | [bring-up.md](bring-up.md) |
 | Client setup, `realmlist.wtf` vs `Config.wtf`, the addon pack | [client.md](client.md) |
 | Death Knights, the verification checklist | [death-knights.md](death-knights.md) |
-| Demon Hunters, the core patch, the **patched `Wow.exe`** | [demon-hunters.md](demon-hunters.md) |
+| Felsworn, the core patch, the **patched `Wow.exe`** | [felsworn.md](felsworn.md) |
 
 > **`patch-Z.MPQ` is now built by both class features together**, because there can only be one
 > archive — two archives cannot both supply `Spell.dbc`, and `patch-Z` is already the top of the
 > resolved chain. Build it with `scripts/build-client-patch.sh`, never by running either
 > generator's MPQ step alone: whichever ran second would silently delete the other class.
-> [demon-hunters.md §5.2](demon-hunters.md) has the full reasoning.
+> [felsworn.md §5.2](felsworn.md) has the full reasoning.
 
 ---
 

@@ -1,9 +1,15 @@
-# Demon Hunter — an eleventh playable class
+# Felsworn — an eleventh playable class
 
-Demon Hunter is a **real class** on this realm, not a reskin and not an opt-in conversion. It is
+Felsworn is a **real class** on this realm, not a reskin and not an opt-in conversion. It is
 class **10**, it appears as its own button on the character-creation screen with its own name,
 icon and colour, only Night Elves and Blood Elves can roll one, and it levels 1→80 like anybody
 else. Rogues are untouched.
+
+**Its content is imported, not invented.** The abilities, the talent trees and every balance
+number come from Project Ascension's class 14, read directly out of an installed Ascension
+client and transplanted record-for-record. §13 is how that works and what it does and does not
+give you. The class that previously occupied slot 10 was a hand-built Felsworn; it is
+preserved on the `demon-hunter-v1` branch and §11 is still its rollback.
 
 This document is the one you read six months from now, or the one you send a friend whose client
 shows ten class buttons instead of eleven. It covers what ships, why it needs two patches that
@@ -27,7 +33,7 @@ the same and this document does not restate it.
 
 | | |
 |---|---|
-| Class | Demon Hunter, **class 10** — the vacant `//CLASS_UNK` slot between Warlock and Druid |
+| Class | Felsworn, **class 10** — the vacant `//CLASS_UNK` slot between Warlock and Druid |
 | Races | **Night Elf (4)** and **Blood Elf (10)**, and nothing else |
 | Start | level **1**, in that race's normal starting zone — Teldrassil (map 1, zone 141) or Eversong Woods (map 530, zone 3431) |
 | Stats | derived from the **Rogue** — leather, agility, dual-wield, parries |
@@ -169,7 +175,7 @@ directory's `README.md` is the full argument. In summary:
 * **Six per-class float tables** have a `0.0f, // ??` at the class-10 index and are read through
   `getClass() - 1` **directly**, not through `Player::IsClass` — so unlike the other ~134 class
   decision points in the core, no module hook can reach them. Left alone they do not mean "no
-  bonus"; `StatSystem.cpp:827` evaluates `0*0/(0+0*0)` and every Demon Hunter gets **NaN dodge
+  bonus"; `StatSystem.cpp:827` evaluates `0*0/(0+0*0)` and every Felsworn gets **NaN dodge
   for its entire life**, never dodging or parrying, while the character sheet displays a
   plausible number.
 
@@ -178,7 +184,7 @@ directory's `README.md` is the full argument. In summary:
 `build/patches/0002-learn-spells-skip-demon-hunter.patch`. `mod-learn-spells` is pinned and
 enabled, and its `GetSpellFamily` has a `default: return SPELLFAMILY_GENERIC` that class 10 is
 the first class ever to reach. Family 0 is the family of every unclassed spell in the game, and
-the scan has no class check — so a Demon Hunter would be handed **15 junk spells at level 1**
+the scan has no class check — so a Felsworn would be handed **15 junk spells at level 1**
 (Parry, four ranks of Intercept, Vampiric Touch, Flash of Light…), 59 Enchanting recipes at 35
 and 38 Alchemy recipes at 45. One `case` label fixes it. The patches README has the full
 argument, including why it returns family 14 and not the class's own 16.
@@ -205,91 +211,54 @@ world-DB `*_dbc` override tables. `/srv/wow/data/dbc/` is never written.
 
 ## 4. The abilities
 
-Twenty-two, level 1 to 70. Spell IDs are `91000`+ (§8).
+Thirty-one abilities, levels 1 to 70, plus 114 talents across three trees. Every one is an
+Ascension record transplanted whole — see §13 — so the numbers are theirs, re-ranked to our
+level ladder rather than re-invented.
 
-| level | ability | spell | donor | cost | cooldown | what it does |
-|---|---|---|---|---|---|---|
-| 1 | **Demon's Bite** | `91000` | `63753` | — | — | A quick slash that builds Fury. |
-| 1 | **Double Jump** | `91500` | `74608` | — | — | Leap again in mid-air. |
-| 2 | **Chaos Strike** | `91020` | `63753` | 40 Fury | — | Spend Fury for a strike that ignores armour. |
-| 4 | **Fel Rush** | `91040` | `64872` | — | 10 s | Dash forward, damaging everything in the path. |
-| 6 | **Glide** | `91501` | `12438` | — | — | Slow your descent and drift forward. |
-| 8 | **Throw Glaive** | `91060` | `31935` | 25 Fury | 9 s | Hurl a glaive that bounces between targets. |
-| 10 | **Immolation Aura** | `91080` | `50589` | — | 30 s | Burn everything around you. |
-| 12 | **Spectral Sight** | `91503` | `34709` | — | 30 s | See the unseen, at the cost of speed. |
-| 14 | **Consume Magic** | `91504` | `19505` | — | 15 s | Devour a beneficial effect from your enemy. |
-| 16 | **Blade Dance** | `91100` | `63753` | 35 Fury | 15 s | Spin, striking everything nearby. |
-| 20 | **Vengeful Retreat** | `91502` | `781` | — | 25 s | Flip backwards out of danger. |
-| 24 | **Blur** | `91505` | `5277` | — | 60 s | Become hard to pin down. |
-| 28 | **Chaos Nova** | `91506` | `30283` | 25 Fury | 45 s | Detonate chaotic energy, stunning everything close. |
-| 32 | **Torment** | `91507` | `56222` | — | 8 s | Taunt your enemy into attacking you. |
-| 36 | **Fiery Brand** | `91120` | `348` | — | 60 s | Brand your enemy; they burn, and they hurt you less. |
-| 40 | ⭐ **Metamorphosis** | `91508` | `47241` | — | 180 s | Take demonic form. |
-| 44 | **Imprison** | `91509` | `20066` | 25 Fury | 45 s | Bind an enemy in place. |
-| 48 | **Sigil of Flame** | `91140` | `26573` | 30 Fury | 30 s | Place a sigil that erupts in flame. |
-| 52 | **Soul Cleave** | `91160` | `63753` | 35 Fury | — | Cleave nearby enemies and mend yourself. |
-| 56 | ⭐ **Eye Beam** | `91180` | `1949` | 30 Fury | 30 s | Unleash a beam of fel energy. |
-| 60 | **Darkness** | `91510` | `65070` | — | 300 s | Shroud an area; allies within are harder to hit. |
-| 70 | **Infernal Strike** | `91511` | `6544` | — | 20 s | Leap to a point and erupt on landing. |
+### 4.1 The resource, and why it is not a power bar
 
-### 4.1 Why almost none of these have ranks
+The bar under the character is **Energy**, and it cannot be anything else: `ChrClasses.dbc` has
+exactly one `DisplayPower` per class. Layered on top is **Felfury**, which is *not* a power
+type. It is a stacking self-aura — spell 91460, whose own imported description reads
+"Represents your Felfury charges" — capped at five by its `CumulativeAura` cell.
 
-The Death Knight re-ranks because Blizzard re-ranks: its abilities have stock ladders whose
-numbers are absolute, so a level-10 DK holding the level-55 record would hit for the level-55
-number. Applied here, the same test comes out the other way, for two reasons that are properties
-of the donors rather than of the design:
+That cell is the cap. The talented generation path runs through the module and can clamp to
+anything; the pure-data path is an authored `TRIGGER_SPELL -> felfury` on the generators, and
+`Aura::ModStackAmount` clamps that against `CumulativeAura` and nothing else
+(`SpellAuras.cpp:973-980`). Ascension ships the cell as **0** because their engine caps the pool
+in code, so the transplant brings a 0 across and the pool would hold exactly one charge forever.
+`fs_abilities.CELL_OVERRIDES` writes the real cap, and the generator asserts it agrees with
+`dh_spec.FELFURY_MAX_STACKS`, which is what the module and the conf read.
 
-1. `SPELL_EFFECT_WEAPON_PERCENT_DAMAGE` is **level-correct by construction**. "80% weapon
-   damage" is right at level 1 and at level 80 from one record, because the weapon is what
-   scales. Every melee strike in the kit uses it.
-2. For an absolute number, `CalcValue` (`SpellInfo.cpp:409-427`) already ramps it per level from
-   `EffectRealPointsPerLevel`, uncapped as long as `MaxLevel` is 0. Stock precedent: Immolation
-   is `(250, +11.5/level)`, Shadowfury is `(342, +1.6)`.
+The loop at level 1 is complete: two Twin Slices (45 Energy each, +1 Felfury each) pay for one
+Sargeron Smite, which costs 0 Energy, spends 2 Felfury and refunds 20 Energy.
 
-So a Demon Hunter ability is one record that is correct at every level, instead of nine records
-plus a `spell_ranks` chain plus a supersede graph.
+### 4.2 Inner Demon
 
-**The price is not yet paid.** With a rank ladder the tooltip is a literal string in the record
-the client is reading, so it cannot be wrong. With `EffectRealPointsPerLevel` the client has to
-do the same per-level arithmetic the server does to render `$s1`. It is believed to — that is
-how stock Immolation Aura reads correctly at every level — but **this has not been verified on
-this client**, and it is the first thing to check in game (§6, step 11).
+Spell 91480, learnable at level 2 — Ascension's own `SpellLevel`, not a choice made here. It is
+a genuine shapeshift (`SPELL_AURA_MOD_SHAPESHIFT`) and it is a Felfury **dump**, not a capstone:
+its duration is bought with the pool at `INNER_DEMON_MS_PER_FELFURY` per stack.
 
-### 4.2 The level cap is 60 today
+Its `EffectMiscValue` arrives as form **56** and must become **23**. Form 56 can be entered but
+nothing can ever gate on it — `SpellInfo::Stances` is a `uint32` (`SpellInfo.h:357-358`) and
+`DBCfmt.h:110` marks the high dwords `x`, so `1 << 55` is unrepresentable and every form-gated
+talent would silently never apply. 23 is the slot `dh_spec.SHAPESHIFT_FORM_ID` reserves.
 
-`conf/worldserver.conf:276` is `# PHASE MaxPlayerLevel p1=60 p2=70 p3=80`, live at 60. The
-ladder is written for the eventual cap and phases in with the realm:
+The duration is script and not data. `Player::ApplySpellMod` applies a flat `SPELLMOD_DURATION`
+exactly once and never multiplies it by a stack count, so Ascension's +5000 ms modifier would
+give one Felfury and five Felfury the same five seconds.
 
-| phase | cap | abilities |
-|---|---|---|
-| 1 | 60 | 20 of 22, Darkness landing exactly at the cap |
-| 2 | 70 | 21 — Infernal Strike |
-| 3 | 80 | all 22, and the top of every scaling curve |
+### 4.3 The ladder
 
-That matches the Death Knight, whose own ladder runs to 65 against the same cap. Compressing
-everything below 60 would mean re-tuning the class twice as the realm advances.
+Nine abilities are real rank ladders — Twin Slice has eight ranks, Sargeron Smite and Fel
+Fireball nine each — which is the first time this repo has generated one. A ladder needs three
+things the Death Knight never did: consecutive ids out of the ability's 20-id block,
+`SkillLineAbility.SupercededBySpell` chaining (without it all eight Twin Slice ranks sit on the
+action bar at once), and `spell_ranks` rows, which is what tells the core that eight records are
+one ability.
 
-### 4.3 One ability is not in the class's spell family
-
-**Vengeful Retreat carries `SPELLFAMILY_HUNTER` (9), and it has to.**
-`SpellEffects.cpp:5060-5072` ends with
-
-```cpp
-unitTarget->JumpTo(speedxy, speedz, m_spellInfo->SpellFamilyName != SPELLFAMILY_HUNTER);
-```
-
-and `Unit::JumpTo` opens `float angle = forward ? 0 : M_PI;`. So the leap goes **backward** if
-and only if the spell's family is 9. There is no other input. A Vengeful Retreat carrying the
-class's own family would leap the player *forwards*, into the thing they are retreating from —
-silently, with no error.
-
-It ships family 9 with `SpellClassMask_1/2/3` all zero. The zeroed masks are what make that
-safe: `IsAffected` requires a non-zero mask overlap, so no hunter talent, glyph or set bonus can
-reach it. No Demon Hunter talent can either, which is an accepted loss — a fixed-distance leap
-has nothing worth modifying.
-
----
-
+`build/modules/mod-demon-hunter/tools/fs_abilities.py` is the list, and it is the source of
+truth. Do not read the ladder out of this document.
 ## 5. Building and installing
 
 ### 5.1 Prerequisites
@@ -336,7 +305,7 @@ on" stays answerable for both halves.
 
 | stored path | what it is |
 |---|---|
-| `DBFilesClient\Spell.dbc` | stock + 85 Death Knight records + the Demon Hunter's |
+| `DBFilesClient\Spell.dbc` | stock + 85 Death Knight records + the Felsworn's |
 | `DBFilesClient\ChrClasses.dbc` | 11 records — class 10 inserted **between** 9 and 11, so the create-screen button lands there too |
 | `DBFilesClient\CharBaseInfo.dbc` | 64 records — `(4,10)` and `(10,10)` added, nothing else |
 | `DBFilesClient\{SkillLine,SkillRaceClassInfo,TalentTab,Talent,SpellShapeshiftForm,CharStartOutfit,SkillLineAbility}.dbc` | the class's skill lines, talent tabs, demon form and starting outfits |
@@ -358,9 +327,9 @@ own atlas plus one of Blizzard's own icons.
 ### 5.4 The addon
 
 `client/addons/mod-demon-hunter/DemonHunter`, declared in `client/addons.txt`. It is shipped to
-**everyone**, not just Demon Hunters, and that is deliberate: `ClassUI.lua` is not class-gated,
+**everyone**, not just Felsworn, and that is deliberate: `ClassUI.lua` is not class-gated,
 because the character who errors on a missing `CLASS_ICON_TCOORDS.DEMONHUNTER` is the priest
-grouped with one, not the Demon Hunter.
+grouped with one, not the Felsworn.
 
 ---
 
@@ -368,7 +337,7 @@ grouped with one, not the Demon Hunter.
 
 Run top to bottom the first time. Each line has one unambiguous pass condition.
 
-**Client, before any Demon Hunter exists**
+**Client, before any Felsworn exists**
 
 1. `client/tools/patch-wow-exe.py --check` reports **patched** at both sites.
 2. Launch the client. It reaches the login screen. *(If it does not, the exe patch and the
@@ -377,7 +346,7 @@ Run top to bottom the first time. Each line has one unambiguous pass condition.
    exe is stock and the archive is patched.
 4. The character-creation screen shows **eleven** class buttons for a Night Elf, with **Demon
    Hunter** among them, its own icon, and no Lua error.
-5. Select Human. Demon Hunter is present but **greyed out and disabled**, with no error dialog.
+5. Select Human. Felsworn is present but **greyed out and disabled**, with no error dialog.
 
 **Server, before creating anything**
 
@@ -386,7 +355,7 @@ Run top to bottom the first time. Each line has one unambiguous pass condition.
 
 **Creation**
 
-8. Create a Night Elf Demon Hunter — it succeeds, and you wake up in **Teldrassil at level 1**.
+8. Create a Night Elf Felsworn — it succeeds, and you wake up in **Teldrassil at level 1**.
 9. Try to create a Human one with a crafted packet: it fails. `playercreateinfo` having rows for
    exactly two races is the real gate; `CharBaseInfo.dbc` only greys the button out.
 10. Character sheet: Agility matches a level-1 Night Elf **Rogue**, energy bar reads 100/100.
@@ -418,26 +387,28 @@ Run top to bottom the first time. Each line has one unambiguous pass condition.
 
 ---
 
-## 7. Double jump, and why it lives in the addon
+## 7. The addon, and what it is for
 
-The client will not send a second `MSG_MOVE_JUMP` while airborne, and that pattern is exactly
-what jump-hack detection looks for — so the second jump cannot originate on the server. It has to
-be initiated client-side, and every cast entry point the client has is protected against addon
-code.
+The Demon Hunter's addon existed to cast two movement spells from a key. Felsworn has no
+movement abilities at all, so `Bindings.xml` is gone and `Movement.lua` has been replaced by
+`Felfury.lua`, which does the one job the default UI cannot.
 
-The addon therefore installs a **priority override binding** over the jump key pointing at a
-secure action button. Three consequences worth knowing:
+Felfury is a stacking buff, not a power type, so the client has no concept of it being a
+resource. Without the addon a player reads their own resource by finding an icon in the buff
+tray and squinting at its stack count. `Felfury.lua` puts the count above the player frame,
+green while banking and gold at cap, with a marker while Inner Demon is up.
 
-* `SetOverrideBindingClick` is `#nocombat`. A key bound — or a `/reload` done — during combat
-  cannot install the override. The `Bindings.xml` bodies are diagnostics for exactly that case,
-  not fallback actions, so the player is told why nothing happened instead of getting a dead key.
-* `SetPropagateKeyboardInput` **does not exist in this client build** (0 hits in `Wow.exe`), so
-  raw key sniffing was never an option.
-* A player who disables the addon loses the feature silently. **The class is not balanced around
-  it.**
+It depends on one thing that can break silently: `UnitAura` can only see an aura the server
+sent, and the server only sends an aura with a client-visible slot. `CanBeSentToClient`
+(`SpellAuras.cpp:1088`) denies a slot to a **passive** aura, so the Felfury record must never
+carry `SPELL_ATTR0_PASSIVE`. If it ever does, the tracker keeps working, finds nothing, and
+reports zero forever — because "the player has no Felfury" is an ordinary thing for it to see.
+That is the first thing to check if the counter never moves.
 
----
-
+The two spell ids in that file are **generated**. `dhspells.py` rewrites them from the id
+allocation on every build. This is not hypothetical caution: the Demon Hunter left
+`DH_SPELL_DOUBLE_JUMP = 91500` behind, and under Felsworn 91500 is Bane of Fire — the jump key
+would have cast a debuff at whatever the player was looking at.
 ## 8. ID plan
 
 The trees cost **212 `Spell.dbc` records** — 207 talent ranks plus 5 trigger rows for the proc
@@ -475,6 +446,43 @@ would silently repoint a spell some character already has in `character_spell`.
 
 ## 9. Known and accepted anomalies
 
+### 9.0 Thirty baseline passives were dropped, and one of them is load-bearing
+
+**This is the largest known gap in the port.** Ascension's class 14 has four advancement tabs,
+not three: Demonology, Slaying and Felblood became our talent trees, and a fourth tab named
+"Class" holds **37 passives** that modify the baseline abilities. WotLK renders exactly three
+talent tabs, so that fourth tab had nowhere to go. Seven of its nodes are castable and became
+baseline abilities; the other **thirty were dropped**.
+
+They are where the class's depth lives — *Felstrider*, *Doomstride* and *Mark of Chaos* all
+modify Chaos Rush; *Infernal Armor*, *Illidari Barrier* and *Anti-Magic* all modify Hateforged
+Barrier; *Cruelty*, *Demonic Evasion* and *Elemental Bane* are flat combat stats. Without them
+the abilities work and do not interact.
+
+**Felheart (301287) is the one that matters most.** Its description is "Each Felfury active now
+increases your haste by $s1%", and it is the only thing that gives Felfury's three carrier auras
+a non-zero amount — they all ship with `EffectBasePoints -1`, i.e. **amount zero**, by design,
+waiting for exactly this passive to fill them in. Without Felheart, banking Felfury does nothing
+at all until it is spent: the resource is a currency and not a ramp, which is half the mechanic.
+`dh_progression.h` reflects this honestly — `kDhFelheartRanks` is generated **empty**, and the
+module's recompute path is therefore dead code today.
+
+Fixing it means finding room for a fourth tree's worth of passives in a three-tab UI. The
+options are to fold the best of them into the existing trees as extra tiers, to attach them to
+the baseline ladder as level-gated passives, or to accept a shallower class. None is done.
+
+### 9.0.1 Every number is Ascension's, and none has been measured here
+
+Carried forward verbatim from `dh_talents.py`, because it is the caveat that matters most: not
+one value in the ladder or the trees has been measured on this realm. They were balanced by
+another project against another server's stat curves, another item budget, and a **classless**
+progression where any ability could be combined with any other. Ported into a class-based ladder
+they are a starting point with a real pedigree, which is not the same thing as balanced.
+
+Roughly 35 talents also depend on a `ProcTypeMask` authored from `SpellMgr.h` rather than
+observed. Expect a pass where several passives simply never fire.
+
+
 ### 9.1 Blizzard's vacant class slot was not empty, it was full of placeholders
 
 This is the trap that would have been hardest to find in play rather than in a file. The
@@ -491,7 +499,7 @@ class-10 rows of the per-class gametables are not zeroed — they are populated 
 All seven are overwritten with the Rogue's block, in both halves — the server reads its
 `gt*_dbc` override rows, the client renders the character sheet from its own copy.
 
-### 9.2 Every Demon Hunter is Illidan in demon form
+### 9.2 Every Felsworn is Illidan in demon form
 
 Display **21135** — `Creature\Illidan\Illidan.mdx`, verified present in
 `CreatureDisplayInfo.dbc` — for every race and gender. A deliberate trade of personalisation for
@@ -521,7 +529,7 @@ against `UnitDefines.h:107-123`:
 What it must **not** acquire is `0x400 CAN_ONLY_CAST_SHAPESHIFT_SPELLS`. `UnitDefines.h:117`
 marks it NYI and that comment is wrong — `SpellInfo::CheckShapeshift` reads it at
 `SpellInfo.cpp:1490`, and a form carrying it silences every spell whose `Stances` mask does not
-include the form. A Demon Hunter in demon form would be able to cast nothing at all. `0xd8` does
+include the form. A Felsworn in demon form would be able to cast nothing at all. `0xd8` does
 not include it; the generator asserts the copy rather than trusting it.
 
 ### 9.3 No backflip animation
@@ -537,7 +545,7 @@ in `CharacterCreate.lua` instead, guarded so a real `GlueStrings` entry would st
 
 ### 9.5 Playerbots
 
-`mod-playerbots` has no Demon Hunter AI. Bots must not be created as class 10; if
+`mod-playerbots` has no Felsworn AI. Bots must not be created as class 10; if
 `RandomPlayerbotFactory` starts producing them, that is the first thing to check.
 
 ---
@@ -546,12 +554,12 @@ in `CharacterCreate.lua` instead, guarded so a real `GlueStrings` entry would st
 
 | symptom | cause | fix |
 |---|---|---|
-| Client shows ten class buttons, no Demon Hunter | the archive is not loading | `dhspells.py --verify`; see [death-knights.md](death-knights.md) §4.4 — the ladder is identical |
+| Client shows ten class buttons, no Felsworn | the archive is not loading | `dhspells.py --verify`; see [death-knights.md](death-knights.md) §4.4 — the ladder is identical |
 | **Character creation is broken for every race**, all buttons blank | the archive has 11 `ChrClasses` records and the exe is **stock** | `client/tools/patch-wow-exe.py` |
 | `Logs/GlueXML.log` says `modified or corrupt` | same | same |
 | Client will not start at all | exe patched against a different build | `--revert`, then re-check the client version |
 | Talent panel empty at 10 | `CLASSMASK_ALL_PLAYABLE` not patched | rebuild the image; `git apply --check build/patches/*.patch` |
-| Demon Hunter never dodges or parries | the six float tables not patched | same |
+| Felsworn never dodges or parries | the six float tables not patched | same |
 | Worldserver exits, `Race N class 10 initial level does not have stats data!` | the boot gate — it is `player_class_stats`, **not** `playercreateinfo`, and the message blames the wrong table | apply `00_class.sql` and restart before anything makes class 10 creatable |
 | Vengeful Retreat leaps **forwards** | its `SpellClassSet` is not 9 | §4.3 |
 | Tooltip damage ≠ combat log | §4.1's open question | check `EffectRealPointsPerLevel` rendering before assuming drift |
@@ -562,7 +570,7 @@ in `CharacterCreate.lua` instead, guarded so a real `GlueStrings` entry would st
 
 In increasing order of thoroughness.
 
-**11.1 Stop new Demon Hunters (seconds, no restart).** `CharacterCreating.Disabled.ClassMask`
+**11.1 Stop new Felsworn (seconds, no restart).** `CharacterCreating.Disabled.ClassMask`
 is checked at `CharacterHandler.cpp:335`; set bit 9 (512) and `.reload config`.
 
 **11.2 Stop the module granting anything (seconds, no restart).**
@@ -578,7 +586,7 @@ from orphan cleanup. Delete the `chrclasses_dbc`, `player_class_stats`, `spell_d
 Characters that already learned a removed spell self-heal: `Player::_addSpell` finds no
 `SpellInfo`, calls `DeleteSpellFromAllPlayers` and logs once.
 
-**Existing Demon Hunters are not migrated.** After 11.3 they are characters of a class that no
+**Existing Felsworn are not migrated.** After 11.3 they are characters of a class that no
 longer exists. `.character level` them into something else or delete them; there is no automatic
 migration and there should not be one.
 
@@ -615,3 +623,46 @@ Death Knight is meant to survive.
 Numbers worth having memorised: class **10**, races **4** and **10**, spell family **16**,
 shapeshift form **23**, display **21135**, spell band **91000+**, talent tabs **412–414**, and
 the two patch sites **0x004da7e5** and **0x0052abd9**.
+
+
+---
+
+## 13. Where the content came from
+
+The class is an **import**. `build/tools/ascension/` reads an installed Project Ascension client
+and transplants whole `Spell.dbc` records; nothing about the abilities was authored here.
+
+**Why a transplant beats a donor.** Every previous class in this repo was built by memcpy-ing a
+stock Blizzard spell and overriding named cells (`dh_donors.py`). That exists because no record
+anywhere described the ability, so the donor's value was in the ~222 cells nobody names. For an
+import there *is* such a record and it is better than any donor: it **is** the ability, including
+the cells no one thought to name. Ascension kept Blizzard's layout exactly — 234 fields,
+936-byte records, verified on open — so the record transplants whole.
+
+**The one thing that makes it non-trivial.** String columns hold *offsets into the source file's
+own string block*, not text. A raw byte copy carries offsets that index into our string block and
+produce garbage — or, worse, a valid-looking wrong string. `importer.py` resolves every string
+column to text on the way through, which is why it returns a dict of Python values and not bytes.
+
+**Four generator capabilities exist only because of this**, and each is inert for a hand-built
+class — the Demon Hunter rebuilt byte-identical after every one:
+
+| capability | why |
+|---|---|
+| rank ladders + `SupercededBySpell` | nine imported abilities have real rank chains |
+| `spell_ranks` emission | without it the core does not know eight records are one ability |
+| the effect/aura range gate | `SpellMgr.cpp:3039` **asserts** on effects > 164 or auras > 316. Ascension's private effects (175, 183) and auras (317, 353, 354) are ordinary data in their file and a worldserver that will not boot in ours |
+| source-reference remapping | a transplanted record's `EffectTriggerSpell` and `*AuraSpell` cells hold the *source server's* ids. Each is remapped to ours, or zeroed and reported. A stale foreign id is a live pointer into whatever our file happens to have at that number |
+
+`extract_class.py` also re-derives and re-checks its recovered column offsets on every run —
+`CharacterAdvancement.dbc`'s header field count is **not** `record_size / 4`, so trusting it
+reads past the end of every record into the next one. An Ascension patch that moves a field
+fails loudly instead of importing garbage.
+
+**What did not come across.** Balance and tree structure did. Behaviour did only where it fits
+WotLK's vocabulary: 12 distinct spell effects and 50 aura types, dominated by
+`PROC_TRIGGER_SPELL` and the two spell-modifier auras, which is stock talent machinery. What
+needed C++ was the dummy auras, the class-script overrides, and six genuinely custom effects.
+Cut as unportable: aura 317 (three talents), spell charges, Ascension's combo system, a second
+power bar, and `Manaburn` — whose tooltip promises "200% of your Stamina" while its only effect
+is `POWER_BURN` base 0, die sides 1, i.e. **one mana**.

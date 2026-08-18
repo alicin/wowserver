@@ -5,7 +5,8 @@
  * else in the kit works if this file is wrong.
  *
  * Read demon_hunter.h first -- it carries the hook-name warning, the generated-table contract,
- * and the reason CLASS_DEMON_HUNTER does not exist in the checkout on disk.
+ * the three-way registration split, and the reason CLASS_DEMON_HUNTER does not exist in the
+ * checkout on disk.
  *
  * WHY A SEPARATE TRANSLATION UNIT AND NOT MORE OF demon_hunter.cpp
  * ---------------------------------------------------------------
@@ -16,97 +17,40 @@
  * decides whether the class can dual wield.
  *
  * It deliberately does NOT introduce a second AllSpellScript. The existing
- * `demon_hunter_movement_allspellscript` (demon_hunter.h:165, implemented demon_hunter.cpp:534,
- * registered :624) is already registered against ALLSPELLHOOK_ON_SPELL_CHECK_CAST; a parallel
- * script would mean a second entry in every one of those dispatch lists for no gain. The two new
+ * `demon_hunter_movement_allspellscript` (declared demon_hunter.h:180, OnSpellCheckCast
+ * implemented demon_hunter.cpp:540, registered :634) is already in the dispatch lists; a
+ * parallel script would mean a second entry in every one of them for no gain. The two new
  * overrides below are members of that same class, defined here.
  *
  * =============================================================================================
- * WHAT MUST BE ADDED ELSEWHERE BEFORE THIS FILE COMPILES
+ * WHAT THIS FILE READS, AND WHO OWNS IT
  * =============================================================================================
  *
- * 1. demon_hunter.h -- opt the existing script into the two new hooks and declare the overrides.
- *    Hooks are opted into EXPLICITLY: an empty `enabledHooks` vector means "all hooks"
- *    (AllSpellScript.cpp:96-98, and the same rule for PlayerScript at PlayerScript.cpp:967-969),
- *    which would register this script against all fourteen AllSpellHook dispatch lists for the
- *    sake of three.
+ * Everything numeric comes from the GENERATED src/dh_progression.h -- tools/dhspells.py
+ * emit_header, from the declarations in tools/dh_spec.py. Nothing here is a literal spell id or
+ * a literal stack count, because both halves of every one of those numbers (the DBC record and
+ * the module's arithmetic) have to agree and the generator is the only thing that can make them:
  *
- *        class demon_hunter_movement_allspellscript : public AllSpellScript
- *        {
- *        public:
- *            demon_hunter_movement_allspellscript()
- *                : AllSpellScript("demon_hunter_movement_allspellscript",
- *            {
- *                ALLSPELLHOOK_ON_SPELL_CHECK_CAST,
- *                ALLSPELLHOOK_ON_CAST,                // NEW -- C1 debit/top-up, C2 form entry
- *                ALLSPELLHOOK_ON_CALC_MAX_DURATION    // NEW -- C2 duration
- *            }) { }
+ *     FELSWORN_SPELL_ID_MIN / _MAX      the id band, used as the cheap first test on every hook
+ *     FELFURY_SPELL_ID                  the resource record
+ *     INNER_DEMON_SPELL_ID              the form record
+ *     FELFURY_MAX_STACKS                the untalented cap
+ *     FELFURY_STACK_CEILING             the felfury record's own CumulativeAura cell, READ off
+ *                                       the emitted Spell.dbc rather than declared
+ *     INNER_DEMON_MS_PER_FELFURY        milliseconds of form bought by one stack
+ *     kDhFelfuryGenerators              rank-1 id -> stacks the MODULE adds (see below)
+ *     kDhFelfurySpenders                rank-1 id -> stacks consumed
+ *     kDhFelAddictRanks                 talent id -> how much it raises the cap
+ *     kDhFelheartRanks                  talent ids whose spell mod fills the haste carriers
  *
- *            void OnSpellCheckCast(Spell* spell, bool strict, SpellCastResult& res) override;
- *            void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* spellInfo,
- *                bool skipCheck) override;                                            // NEW
- *            void OnCalcMaxDuration(Aura const* aura, int32& maxDuration) override;    // NEW
- *        };
- *
- *        struct DemonHunterConfig
- *        {
- *            ...
- *            uint8  FelfuryMaxStacks       = FELFURY_MAX_STACKS;
- *            uint32 InnerDemonMsPerFelfury = INNER_DEMON_MS_PER_FELFURY;
- *        };
- *
- *        namespace Felsworn { void GateFelfurySpender(Spell const* spell, SpellCastResult& res); }
- *        void AddSC_felsworn_felfury();
- *
- * 2. demon_hunter.cpp -- four edits, all one line each:
- *      * DemonHunterConfig::Load gains
- *            FelfuryMaxStacks       = sConfigMgr->GetOption<uint8>("Felsworn.Felfury.MaxStacks",
- *                                                                 FELFURY_MAX_STACKS);
- *            InnerDemonMsPerFelfury = sConfigMgr->GetOption<uint32>(
- *                "Felsworn.InnerDemon.MsPerFelfury", INNER_DEMON_MS_PER_FELFURY);
- *      * OnSpellCheckCast gains `Felsworn::GateFelfurySpender(spell, res);` IMMEDIATELY after the
- *        `if (!spell) return;` at demon_hunter.cpp:536-537 -- i.e. BEFORE the Double Jump / Glide
- *        id test, which returns early for everything else.
- *      * AddSC_demon_hunter() gains `AddSC_felsworn_felfury();`.
- *    The gate lives behind a free function rather than in this file's own OnSpellCheckCast
- *    because that override already has a definition in demon_hunter.cpp and a function may only
- *    be defined once. Splitting the gate out is the smaller lie than moving the falling gate,
- *    which has nothing to do with Felfury, into a file named for it.
- *
- * 3. conf/modules/mod_demon_hunter.conf (and the .conf.dist beside it) gain
- *    `Felsworn.Felfury.MaxStacks` and `Felsworn.InnerDemon.MsPerFelfury`. On this deployment
- *    deploy/docker-compose.yml bind-mounts conf/modules over the image's copy, so a key that is
- *    only in the .dist is a key that does not exist -- see the comment on DemonHunterConfig::Load.
- *
- * =============================================================================================
- * WHAT tools/dhspells.py MUST EMIT INTO dh_progression.h (port-plan.md 6.4)
- * =============================================================================================
- *
- *     constexpr uint32 FELSWORN_SPELL_ID_MIN;       // dh_spec.SPELL_ID_BASE,       91000
- *     constexpr uint32 FELSWORN_SPELL_ID_MAX;       // dh_spec.TALENT_SPELL_ID_MAX, 93000, EXCL
- *     constexpr uint32 FELFURY_SPELL_ID;            // spell_id_for("felfury", 0),     91460
- *     constexpr uint32 INNER_DEMON_SPELL_ID;        // spell_id_for("inner_demon", 0), 91480
- *     constexpr uint8  FELFURY_MAX_STACKS;          // dh_spec.FELFURY_MAX_STACKS,          5
- *     constexpr uint8  FELFURY_STACK_CEILING;       // the CumulativeAura cell on the record
- *     constexpr uint32 INNER_DEMON_MS_PER_FELFURY;  // dh_spec.INNER_DEMON_MS_PER_FELFURY, 5000
- *
- *     struct DhFelfuryFlow { uint32 spellId; uint8 stacks; };
- *     constexpr std::array<DhFelfuryFlow, N> kDhFelfuryGenerators;  // rank 1 id -> TOTAL granted
- *     constexpr std::array<DhFelfuryFlow, N> kDhFelfurySpenders;    // rank 1 id -> stacks eaten
- *     constexpr std::array<DhFelfuryFlow, N> kDhFelAddictRanks;     // talent id -> +max stacks
- *     constexpr std::array<uint32, N>        kDhFelheartRanks;      // talent id, ALL_EFFECTS mod
- *
- * The Dh prefix on the arrays and the struct is not decoration. mod-dk-lowlevel is statically
- * linked into the same worldserver binary; two statically-linked modules defining DIFFERENT
- * types under ONE name is an ODR violation that links without a diagnostic and misbehaves at run
- * time. Same argument as DhGrant/kDhProgression, demon_hunter.h:56-61. The SCREAMING_CASE scalars
- * are named exactly as port-plan.md 6.1 names them and are left alone for that reason.
- *
- * std::array and not a C array because a talent that gets cut leaves its table EMPTY, and
- * `constexpr DhFelfuryFlow kDhFelAddictRanks[] = {};` is ill-formed C++. Neither Felheart
- * (301287) nor Fel Addict (300487/300488) is placed in any of the three tab tables in
- * port-plan.md 3.1-3.3, so both tables being empty on the first build is the expected case, not
- * a bug.
+ * A GENERATOR'S CELL IS THE MODULE'S SHARE, NOT THE ABILITY'S TOTAL, and that distinction is
+ * the whole reason the table is generated rather than written here. Part of every grant is pure
+ * data: an authored `Effect_N = 64 SPELL_EFFECT_TRIGGER_SPELL -> felfury` reaches the pool
+ * through Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:4615), whose ModStackAmount(1) at
+ * :4665 is worth exactly one stack -- there is no cell anywhere in Spell.dbc that says "two".
+ * emit_header counts those effects on the record it just emitted and writes `total - counted`,
+ * dropping the row entirely when that is zero. So Twin Slice and Fel Fireball, whose +1 is
+ * genuinely data, are absent from the table and cost this file nothing at run time.
  *
  * THREE PROPERTIES OF THE felfury RECORD THIS FILE ASSUMES (port-plan.md 4.C1, 7.1):
  *   * NOT SPELL_ATTR0_PASSIVE. Aura::CanBeSentToClient (SpellAuras.cpp:1088-1091) is
@@ -115,10 +59,11 @@
  *   * SPELL_ATTR0_NO_AURA_CANCEL, so a player cannot right-click their own resource off.
  *   * CumulativeAura = FELFURY_STACK_CEILING, which must be the FULLY TALENTED maximum
  *     (FELFURY_MAX_STACKS plus the best Fel Addict rank) and not FELFURY_MAX_STACKS. The +1
- *     generation path is pure data -- one authored `Effect_N = 64 TRIGGER_SPELL -> felfury` --
- *     and it goes through Aura::ModStackAmount, which clamps against the DBC cell at
- *     SpellAuras.cpp:973-980. A ceiling of 5 makes Fel Addict silently do nothing. The static
- *     assert below is what turns that into a build error instead of a shrug in game.
+ *     generation path is pure data and it goes through Aura::ModStackAmount, which clamps
+ *     against the DBC cell at SpellAuras.cpp:973-980. A ceiling equal to FELFURY_MAX_STACKS
+ *     makes Fel Addict silently do nothing. The static assert below is what turns that into a
+ *     build error instead of a shrug in game; emit_header checks the same thing against the
+ *     record, so the two halves cannot disagree.
  */
 
 #include "demon_hunter.h"
@@ -153,9 +98,10 @@ namespace
             if (!FelswornSpellIdInRange(table[i].spellId))
                 return false;
 
-            // A zero is never meaningful in either table: a generator that grants nothing is not
-            // a generator, a spender that costs nothing is not a spender, and the generator path
-            // below subtracts the data-supplied +1 from this cell.
+            // A zero is never meaningful in any of the three tables: a spender that costs
+            // nothing is not a spender, a Fel Addict rank that raises the cap by nothing is not
+            // a talent, and emit_header drops a generator whose share is zero rather than
+            // emitting a row that would make this file do arithmetic to reach a no-op.
             if (table[i].stacks == 0 || table[i].stacks > FELFURY_STACK_CEILING)
                 return false;
 
@@ -210,7 +156,7 @@ namespace
         "kDhFelfurySpenders has an out-of-band id, a zero cost, or a duplicate rank-1 id");
 
     static_assert(FelfuryFlowsAreWellFormed(kDhFelAddictRanks),
-        "kDhFelAddictRanks has an out-of-band talent id or a duplicate");
+        "kDhFelAddictRanks has an out-of-band talent id, a zero bonus, or a duplicate");
 
     // Inner Demon is the one spender whose cost is not a constant -- it eats the whole pool -- so
     // it is handled on its own path. A row in kDhFelfurySpenders would debit it twice.
@@ -226,14 +172,6 @@ namespace
     // =========================================================================================
     // C1 -- THE RESOURCE
     // =========================================================================================
-
-    // How much of a generator's advertised grant arrives without this file's help: exactly one
-    // stack, from the authored `Effect_N = 64 SPELL_EFFECT_TRIGGER_SPELL -> felfury` that
-    // port-plan.md 4.C1 puts on every generator. Unit::_TryStackingOrRefreshingExistingAura
-    // (Unit.cpp:4665) calls ModStackAmount(1) per triggered cast and there is no cell anywhere in
-    // Spell.dbc that says "two" -- which is the whole reason Annihilan Strike's +2 and Burning
-    // Hatred's / Blood of Mannoroth's +6 need a script at all.
-    constexpr uint8 kFelfuryStacksFromData = 1;
 
     Aura* FelfuryAura(Unit const* unit)
     {
@@ -263,8 +201,8 @@ namespace
      * max() and not a sum, because a talent RANK is a spell rank: Player::addSpell deactivates
      * the lower rank when the higher one is learned, so at most one of these auras is ever
      * applied and the generator writes the CUMULATIVE bonus into each rank's cell
-     * (port-plan.md 3.4, dhspells.py:878). max() is also the right answer if that ever stops
-     * being true, which a sum is not.
+     * (port-plan.md 3.4). max() is also the right answer if that ever stops being true, which a
+     * sum is not. Both Fel Addict ranks are unplaced today and the table is legitimately empty.
      */
     uint8 EffectiveFelfuryCap(Player const* player)
     {
@@ -291,6 +229,37 @@ namespace
     }
 
     /*
+     * Enforce the talent-aware ceiling on whatever the pool currently holds.
+     *
+     * CALLED FROM THE AURA HOOK AND NOT FROM THE CAST HOOK, and that is the fix for a real
+     * ordering bug rather than a preference. The obvious place to clamp is OnSpellCast, right
+     * after a generator resolves -- but OnSpellCast does not run after the generator's effects
+     * on every spell. Spell::_cast (Spell.cpp:3999) only calls handle_immediate() for a spell
+     * with `Speed == 0`; a spell with a travel time is put into SPELL_STATE_DELAYED and EVERY
+     * one of its effects, including a TARGET_UNIT_CASTER `Effect 64 -> felfury`, runs later in
+     * Spell::handle_delayed (:4155) -- long after sScriptMgr->OnSpellCast at :4077. Fel Fireball
+     * is the ranged generator and is exactly that shape. Clamping at cast time would therefore
+     * clamp before the data +1 landed, and an untalented player would finish one stack above
+     * their own cap.
+     *
+     * The aura hook has no such ordering to get wrong: it fires whenever the pool actually
+     * changes through the aura system, whichever half of the grant caused it. Both halves are
+     * covered because the hook fires on a REFRESH as well as a first application --
+     * Unit::_TryStackingOrRefreshingExistingAura calls sScriptMgr->OnAuraApply at Unit.cpp:4666,
+     * immediately after its ModStackAmount(1), and Unit::_ApplyAura calls it at :4807.
+     *
+     * The clamp cannot recurse. SetStackAmount is HandleAuraSpecificMods plus
+     * AuraEffect::ChangeAmount (SpellAuras.cpp:942-966) and neither body contains a
+     * sScriptMgr->OnAuraApply call, so nothing re-enters the hook that called this.
+     */
+    void ClampFelfuryToCap(Player* player, Aura* felfury)
+    {
+        uint8 const ceiling = EffectiveFelfuryCap(player);
+        if (felfury->GetStackAmount() > ceiling)
+            felfury->SetStackAmount(ceiling);
+    }
+
+    /*
      * Re-derive the Felfury aura's three carrier amounts from the player's CURRENT spell mods.
      *
      * WHY THIS FUNCTION HAS TO EXIST -- and it is the single least obvious thing in the file.
@@ -302,9 +271,9 @@ namespace
      * amount 1, and its entire job is to raise those zeros to 1% each.
      *
      * The per-stack scaling is then free, twice over:
-     *   * SpellEffectInfo::CalcValue applies the mod (SpellInfo.cpp:459 ->
-     *     Unit::ApplyEffectModifiers -> Unit.cpp:11559, SPELLMOD_ALL_EFFECTS), so each carrier
-     *     computes 0 + 1 = 1;
+     *   * SpellEffectInfo::CalcValue applies the mod (SpellInfo.cpp:459 calls
+     *     Unit::ApplyEffectModifiers, Unit.cpp:11555, whose first act at :11559 is the
+     *     SPELLMOD_ALL_EFFECTS pass), so each carrier computes 0 + 1 = 1;
      *   * AuraEffect::CalculateAmount ENDS with `amount *= GetBase()->GetStackAmount();`
      *     (SpellAuraEffects.cpp:580), and Aura::SetStackAmount re-runs CalculateAmount for every
      *     effect on every stack change (SpellAuras.cpp:957-959).
@@ -313,16 +282,16 @@ namespace
      * WHAT IS NOT FREE is learning or unlearning Felheart while the aura is already up.
      * AuraEffect::ApplySpellMod exists to re-apply exactly this kind of passive recalculation,
      * but its loop is gated on `(aura->IsPassive() || aura->IsPermanent())`
-     * (SpellAuraEffects.cpp:850-852) -- and Felfury is DELIBERATELY neither. It is non-passive
+     * (SpellAuraEffects.cpp:850) -- and Felfury is DELIBERATELY neither. It is non-passive
      * because Aura::CanBeSentToClient (SpellAuras.cpp:1088) would otherwise deny it a client aura
-     * slot, and it has a real DurationIndex so the pool decays, so IsPermanent() is false too.
-     * The core therefore walks straight past it and the haste stays at zero until the next stack
-     * change happens to recompute it. Spending a talent point and seeing no haste until you swing
-     * is the bug this function prevents.
+     * slot, and it has a real DurationIndex so the pool decays, so IsPermanent() (which tests
+     * GetMaxDuration() == -1, SpellAuras.h:139) is false too. The core therefore walks straight
+     * past it and the haste stays at zero until the next stack change happens to recompute it.
+     * Spending a talent point and seeing no haste until you swing is the bug this prevents.
      *
      * Aura::SetStackAmount(GetStackAmount()) and not AuraEffect::RecalculateAmount(), for two
      * reasons:
-     *   * RecalculateAmount early-returns on !CanBeRecalculated() (SpellAuraEffects.h:76-78), and
+     *   * RecalculateAmount early-returns on !CanBeRecalculated() (SpellAuraEffects.h:76-77), and
      *     AuraEffect::SetAmount clears that flag permanently (:66). One ChangeAmount call with
      *     mark = true, from anywhere in the core, would silently disable the path forever.
      *   * SetStackAmount (SpellAuras.cpp:942-966) is unconditional and does the WHOLE job:
@@ -338,26 +307,27 @@ namespace
     }
 
     /*
-     * Add `extra` stacks on top of whatever the authored Effect 64 already granted, then enforce
-     * the talent-aware ceiling.
+     * Add the module's share of a generator's grant.
      *
-     * `extra == 0` is MEANINGFUL and not a no-op: it is how a plain +1 generator, whose entire
-     * grant came from data, still gets the ceiling enforced. The DBC cell is the fully-talented
-     * maximum, so an untalented player who casts a generator at cap would otherwise walk past it.
+     * `extra` is the generated cell, which is already `total - what the record grants itself`,
+     * so this function adds and never subtracts. A generator whose whole grant is data has no
+     * row in kDhFelfuryGenerators at all and never reaches here.
+     *
+     * The ceiling is enforced here as well as in ClampFelfuryToCap because this path is a script
+     * action at a known moment, and leaving it to the aura hook would mean a multi-grant sat
+     * above the cap until something else touched the pool -- ModStackAmount clamps against the
+     * DBC ceiling (SpellAuras.cpp:973-980), which is the FULLY TALENTED maximum, not this
+     * player's.
      */
     void GrantFelfury(Player* player, uint8 extra)
     {
+        if (!extra)
+            return;
+
         Aura* felfury = FelfuryAura(player);
 
         if (!felfury)
         {
-            // The data half did not land. With nothing to top up there is nothing to do and
-            // nothing to clamp -- and no log line either, because the only way here is a
-            // generator whose authored Effect 64 is missing, which is a data defect that the
-            // generator's own checks (port-plan.md 6.4 item 5) are the right place to catch.
-            if (!extra)
-                return;
-
             player->CastSpell(player, FELFURY_SPELL_ID, true);
 
             felfury = FelfuryAura(player);
@@ -381,9 +351,7 @@ namespace
         if (extra)
             felfury->ModStackAmount(int32(extra));
 
-        uint8 const ceiling = EffectiveFelfuryCap(player);
-        if (felfury->GetStackAmount() > ceiling)
-            felfury->SetStackAmount(ceiling);
+        ClampFelfuryToCap(player, felfury);
     }
 
     // Returns how many stacks were actually taken, which is not always `cost` -- see the caller.
@@ -408,9 +376,12 @@ namespace
     // The rank-1 id of a chain, so the generated tables carry ONE row per ability instead of one
     // per rank. Sargeron Smite alone has nine (port-plan.md 2.1). SpellMgr::GetFirstSpellInChain
     // (SpellMgr.cpp:603-609) returns the argument unchanged when the spell is not in a chain, so
-    // this is correct for the single-record abilities too. It depends on the `spell_ranks` rows
-    // that port-plan.md 6.4 item 1 adds to the generator; without them every rank above 1 falls
-    // out of both tables and silently costs and grants nothing.
+    // this is correct for the single-record abilities and for every talent too.
+    //
+    // It depends on the `spell_ranks` rows tools/dhspells.py emits from plan.rank_chains; without
+    // them every rank above 1 would fall out of both tables and silently cost and grant nothing.
+    // emit_header checks that each multi-rank spender has a chain, so that dependency is a
+    // generator failure rather than a run-time surprise.
     uint32 FelswornRankOne(uint32 spellId)
     {
         return sSpellMgr->GetFirstSpellInChain(spellId);
@@ -452,9 +423,9 @@ namespace
     // "Auras: Unknown Shapeshift Type: 23" (SpellAuraEffects.cpp:2040). It is noise and nothing
     // else, and the two things that could have made it worse both fall the right way -- the
     // `default:` branch leaves PowerType at POWER_MANA so the setPowerType block at :2085 is
-    // skipped entirely, and form 23 is not in the movement-aura-stripping switch at :2072, so
-    // RemoveAurasByShapeShift never runs and the Felfury pool survives the transformation.
-    // Player::InitDataForForm's own `default:` then restores ChrClasses.powerType
+    // skipped entirely, and form 23 is not in the movement-aura-stripping switch that ends at
+    // :2072, so RemoveAurasByShapeShift never runs and the Felfury pool survives the
+    // transformation. Player::InitDataForForm's own `default:` then restores ChrClasses.powerType
     // (Player.cpp:10781-10787), which is why the Energy bar is still there inside the form.
 
     // The static_assert above only covers the COMPILED default. `InnerDemon.MsPerFelfury = 0` in
@@ -472,35 +443,63 @@ namespace
         return int32(felfurySpent) * int32(InnerDemonMsPerFelfury());
     }
 
-    /*
-     * Consume the whole pool and set the form's duration from what was consumed.
-     *
-     * WHY THIS IS A SCRIPT AND NOT A CELL, which is the single most misread number in the family:
-     * Ascension supplies the duration from 803465, `aura 107 ADD_FLAT_MODIFIER, misc 1 =
-     * SPELLMOD_DURATION, bp 4999 ds 1` = +5000 ms, and MULTIPLIES it by the Felfury spent.
-     * Player::ApplySpellMod cannot do that. It accumulates `totalflat` across the matching mods
-     * and applies it exactly once -- `basevalue = (basevalue + totalflat) > 0 ? ... : 0` for
-     * SPELLMOD_DURATION at Player.cpp:10077-10078 -- and there is no input to that arithmetic
-     * that a stack count could reach. Five Felfury and one Felfury would both yield +5000 ms.
-     *
-     * THE DATA HALF MUST THEREFORE NOT SHIP A SPELLMOD_DURATION ON INNER DEMON. If one survives
-     * the port it is applied by Aura::CalcMaxDuration at SpellAuras.cpp:810-811, i.e. AFTER our
-     * OnCalcMaxDuration hook has already written the right answer, and it would add a flat 5000
-     * on top of every duration. The explicit SetMaxDuration/SetDuration below is what makes a
-     * stray one harmless rather than a five-second bonus nobody can find.
-     */
-    void EnterInnerDemon(Player* player)
+    // The most form a re-cast may accumulate: one full pool's worth. Re-entering ADDS to what is
+    // left (OnCalcMaxDuration below) because Ascension's model is additive -- all four of the
+    // deferred extenders add to a running form -- and additive with no ceiling is a permanent
+    // one, since generating a full pool takes far less time than a full pool buys.
+    int32 InnerDemonDurationCap(Player const* player)
     {
-        Aura* form = player->GetAura(INNER_DEMON_SPELL_ID, player->GetGUID());
+        return int32(EffectiveFelfuryCap(player)) * int32(InnerDemonMsPerFelfury());
+    }
+
+    /*
+     * Consume the whole pool. The DURATION IS NOT SET HERE -- see OnCalcMaxDuration.
+     *
+     * That split is forced by the core and it is worth being exact about, because the obvious
+     * shape (compute the duration here, after the debit, from what was spent) silently truncates
+     * the form on every re-cast:
+     *
+     *   * a re-cast does not build a new Aura. Unit::_TryStackingOrRefreshingExistingAura finds
+     *     the applied one and calls ModStackAmount(1) on it (Unit.cpp:4665), which reaches
+     *     Aura::RefreshTimers (SpellAuras.cpp:856). That does `m_maxDuration = CalcMaxDuration();`
+     *     at :858 and RefreshDuration() at :859, in that order;
+     *   * so by the time this function runs, the time that was left on the form has ALREADY been
+     *     overwritten. Adding to `form->GetDuration()` here would be adding to the number the
+     *     hook just wrote, i.e. doubling it, and assigning over it would throw the remainder away.
+     *
+     * OnCalcMaxDuration is called from inside that same RefreshTimers, BEFORE RefreshDuration
+     * replaces the value, so it is the only place in the core where both the remaining time and
+     * the pool about to be spent are visible at once. It computes the whole answer; this function
+     * only pays for it.
+     *
+     * WHICH MEANS THE DATA HALF MUST NOT SHIP A SPELLMOD_DURATION AFFECTING INNER DEMON.
+     * Aura::CalcMaxDuration applies one at SpellAuras.cpp:810-811, i.e. AFTER our hook has
+     * written the right answer, and nothing here can detect or undo it: by the time we run,
+     * m_maxDuration and m_duration both already carry it. Ascension supplies exactly such a mod
+     * from 803465 (`aura 107 ADD_FLAT_MODIFIER, misc 1 = SPELLMOD_DURATION, bp 4999 ds 1`) and it
+     * must not survive the port -- not because it would double anything subtly, but because
+     * Player::ApplySpellMod cannot do what Ascension does with it. It accumulates `totalflat`
+     * across the matching mods and applies it exactly once (`basevalue = (basevalue + totalflat)
+     * > 0 ? ... : 0` for SPELLMOD_DURATION, Player.cpp:10077-10078); there is no input to that
+     * arithmetic a stack count can reach, so five Felfury and one Felfury would both get +5000 ms.
+     * The multiply is engine code there and script here.
+     */
+    void EnterInnerDemon(Player* player, uint32 spellId)
+    {
+        // Looked up by the id that was actually CAST rather than by INNER_DEMON_SPELL_ID. The
+        // two are the same today -- Inner Demon has one rank -- but the caller dispatched on
+        // GetFirstSpellInChain, so a second rank would leave this lookup finding nothing and the
+        // pool never being debited, with no log line. Same asymmetry, same fix, in
+        // OnCalcMaxDuration.
+        Aura* form = player->GetAura(spellId, player->GetGUID());
         if (!form)
         {
             // The cast happened but the aura did not land -- an immunity, or a linked event that
             // removed it during HandleEffects. Do NOT debit: the player got nothing, so they pay
-            // nothing. This is a real ordering property and not defensive noise; see the comment
-            // on OnSpellCast for why the aura already exists by the time this runs.
+            // nothing.
             LOG_DEBUG("module.demon_hunter",
                 "Inner Demon ({}) cast by player {} left no aura; Felfury not debited.",
-                INNER_DEMON_SPELL_ID, player->GetGUID().ToString());
+                spellId, player->GetGUID().ToString());
             return;
         }
 
@@ -509,24 +508,50 @@ namespace
 
         if (!spent)
         {
-            // Only reachable if the cast bypassed GateFelfurySpender -- a `.cast`, a triggered
-            // cast, or a future auto-enter talent (800222 The Demon Within). Worth a line: it
-            // means free demon-form uptime, which is the one bug in this file a player would
-            // never report.
+            /*
+             * The pool emptied between CheckCast and here.
+             *
+             * NOT "the gate was bypassed", which is what this said before and is false: a
+             * triggered cast is gated like any other. Spell::prepare calls CheckCast(true) at
+             * Spell.cpp:3522 with no IsTriggered() guard at all, and ScriptMgr::OnSpellCheckCast
+             * is dispatched from the top of CheckCast at :5666. `.cast` goes the same way.
+             *
+             * So the reachable causes are all races inside the one cast: the Felfury aura
+             * expiring on its own duration, a dispel, or a linked event during handle_immediate
+             * removing it. Each of those is a free transformation of the minimum duration --
+             * small, but the one bug in this file a player would never report, hence the line.
+             */
             LOG_WARN("module.demon_hunter",
-                "Inner Demon ({}) entered by player {} with no Felfury banked -- the cast-time "
-                "gate was bypassed. Falling back to one Felfury's worth of duration.",
-                INNER_DEMON_SPELL_ID, player->GetGUID().ToString());
+                "Inner Demon ({}) entered by player {} with no Felfury banked -- the pool was "
+                "emptied between CheckCast and cast. The form has the one-stack minimum.",
+                spellId, player->GetGUID().ToString());
         }
 
-        int32 const duration = InnerDemonDurationFor(std::max<uint8>(spent, 1));
-
-        // SetMaxDuration first so the client's buff timer is drawn against the right total, then
-        // SetDuration -- which is the one that calls SetNeedClientUpdateForTargets
-        // (SpellAuras.cpp:815-825). withMods stays false: applying SPELLMOD_DURATION here is
-        // exactly the double-count the comment above is about.
-        form->SetMaxDuration(duration);
-        form->SetDuration(duration);
+        /*
+         * The duration is OnCalcMaxDuration's answer, and this is the cheapest place to notice
+         * that it never got to give one. Both ways that happens are data defects with no other
+         * symptom at all -- the pool is spent and the form is simply shorter than it was paid
+         * for:
+         *   * SPELL_ATTR1_AURA_UNIQUE on the record makes Aura::ModStackAmount compute
+         *     `refresh == false` (SpellAuras.cpp:988), so a RE-cast skips RefreshTimers at :994
+         *     and therefore skips our hook entirely;
+         *   * a SPELLMOD_DURATION affecting Inner Demon survived the port. Aura::CalcMaxDuration
+         *     applies one at SpellAuras.cpp:810-811, AFTER our hook, and Ascension's own is
+         *     803465. A negative one shortens what we wrote.
+         *
+         * A correct run cannot trip this. The accumulation cap is EffectiveFelfuryCap * ms and
+         * `spent` never exceeds EffectiveFelfuryCap, so the floor below is always at or under
+         * the cap that OnCalcMaxDuration clamps to.
+         */
+        int32 const minimumDuration = InnerDemonDurationFor(std::max<uint8>(spent, 1));
+        if (form->GetDuration() < minimumDuration)
+            LOG_ERROR("module.demon_hunter",
+                "Inner Demon ({}) on player {} has {} ms left after spending {} Felfury, below "
+                "the {} ms that buys. The record carries SPELL_ATTR1_AURA_UNIQUE (which makes a "
+                "re-cast skip Aura::RefreshTimers and so our duration hook), or a "
+                "SPELLMOD_DURATION affecting it survived the port. Both are data defects.",
+                spellId, player->GetGUID().ToString(), form->GetDuration(), uint32(spent),
+                minimumDuration);
     }
 
     /*
@@ -535,11 +560,11 @@ namespace
      * The four Inner Demon extenders (803089 Azzinoth's Assault +3 s, 806236 Felshock +1 s,
      * 803559 Azzinoth's Battery +1 s, 807548 Demonic Blood +0.5 s -- Ascension effects 177 and
      * 173) belong on this hook per port-plan.md 4.C2, and each is one `form->SetDuration(
-     * form->GetDuration() + ms)` guarded by a cap. They are not written because the four are NOT
-     * one shape: 803089/806236/803559 trigger on a CAST and would ride kDhFelfurySpenders-style
-     * rows, while 807548 triggers on GENERATING Felfury and would have to hang off GrantFelfury.
-     * Two tables, and the generator has neither. Inventing them here would put the id plan in
-     * two places, which is the one thing dh_spec.py exists to prevent.
+     * min(form->GetDuration() + ms, InnerDemonDurationCap(player)))`. They are not written
+     * because the four are NOT one shape: 803089/806236/803559 trigger on a CAST and would ride
+     * kDhFelfurySpenders-style rows, while 807548 triggers on GENERATING Felfury and would have
+     * to hang off GrantFelfury. Two tables, and the generator has neither. Inventing them here
+     * would put the id plan in two places, which is the one thing dh_spec.py exists to prevent.
      *
      * On the same list and for the same reason: the Felfury refund rolls (705137 Azzinoth's
      * Battery, 804219 Infernal Doom, "chance not to consume"). Those two Ascension records put
@@ -558,8 +583,16 @@ namespace
  * Called from demon_hunter_movement_allspellscript::OnSpellCheckCast, which is dispatched from
  * the very first lines of Spell::CheckCast (Spell.cpp:5664-5669) -- before the cooldown check at
  * :5672, before TakePower, and before Spell::prepare reaches TriggerGlobalCooldown at :3686. A
- * refusal written into `res` therefore returns out of prepare at :3538-3541 having cost the
- * player nothing at all. That is the identical argument already written at demon_hunter.cpp:516.
+ * refusal written into `res` therefore returns out of prepare at :3535-3540 having cost the
+ * player nothing at all. That is the identical argument already written at demon_hunter.cpp:522.
+ *
+ * IT GATES TRIGGERED CASTS TOO, which is a deliberate property and not an oversight.
+ * Spell::prepare calls CheckCast(true) at :3521 unconditionally -- there is no IsTriggered()
+ * guard -- so an internally-triggered spender that cannot afford itself is refused here. That is
+ * right for a talent like 800222 The Demon Within, whose own condition is ">= 6 Felfury"; it is
+ * worth knowing about for anything else, because Spell::SendCastResult rewrites the result to
+ * SPELL_FAILED_DONT_REPORT whenever TRIGGERED_DONT_REPORT_CAST_ERROR is set (:4685-4686), so
+ * such a refusal is completely silent.
  *
  * SPELL_FAILED_NO_POWER and not something Felfury-specific because there is nothing
  * Felfury-specific to send: SpellCastResult is Blizzard's enum (SharedDefines.h:935-1022) and the
@@ -574,9 +607,10 @@ void Felsworn::GateFelfurySpender(Spell const* spell, SpellCastResult& res)
         return;
 
     // Leave an earlier refusal alone. ScriptMgr::OnSpellCheckCast walks every enabled
-    // AllSpellScript in registration order against ONE shared `res` (AllSpellScript.cpp:27-30) --
-    // there is no short-circuit on failure, so a later script silently overwrites an earlier one's
-    // answer. This function therefore only ever writes into an untouched SPELL_CAST_OK.
+    // AllSpellScript in registration order against ONE shared `res` (AllSpellScript.cpp:27-30,
+    // through CALL_ENABLED_HOOKS at ScriptMgrMacros.h:72-74) -- there is no short-circuit on
+    // failure, so a later script silently overwrites an earlier one's answer. This function
+    // therefore only ever writes into an untouched SPELL_CAST_OK.
     if (res != SPELL_CAST_OK)
         return;
 
@@ -622,21 +656,25 @@ void Felsworn::GateFelfurySpender(Spell const* spell, SpellCastResult& res)
  * DEBIT, MULTI-GRANT AND FORM ENTRY (C1 + C2)
  * =============================================================================================
  *
- * ALLSPELLHOOK_ON_CAST, dispatched from the LAST lines of Spell::_cast (Spell.cpp:4077). The
- * position in that function is what makes this hook the right one, and it is worth being precise
- * about because the whole of C2 depends on it:
+ * ALLSPELLHOOK_ON_CAST, dispatched from the LAST lines of Spell::_cast (Spell.cpp:4077), after
+ * TakePower() at :3923. What it is NOT is "after the spell's effects", and getting that wrong is
+ * how the previous version of this file grew an off-by-one:
  *
- *     TakePower()            Spell.cpp:3923   the Energy half of the cost is already gone
- *     handle_immediate()     Spell.cpp:4027   effects run -- the authored Effect 64 has already
- *                                             granted its +1, and Inner Demon's aura already
- *                                             EXISTS, so Aura::CalcMaxDuration and therefore
- *                                             OnCalcMaxDuration below have ALREADY run
- *     sScriptMgr->OnSpellCast(...)            <- here
+ *   * for a spell with `Speed == 0` -- everything melee, and Inner Demon -- Spell::_cast reaches
+ *     handle_immediate() at :4027 and the effects really have run by the time we are called;
+ *   * for a spell with a travel time, the branch at :3999 puts the cast into SPELL_STATE_DELAYED
+ *     instead and does NOT call handle_immediate at all. Every effect, caster-targeted ones
+ *     included, runs later from Spell::handle_delayed (:4155). Fel Fireball is that shape.
  *
- * So OnCalcMaxDuration reads the pool BEFORE it is debited and this function debits it after.
- * Nothing is stashed between the two calls: both read the stack count off the aura themselves,
- * which is what keeps the pair correct when two Felsworn cast in the same tick. A member variable
- * holding "the last n" would not be.
+ * So this hook may run before or after a generator's authored `Effect 64 -> felfury`. Nothing
+ * below depends on which: the module adds its own share and the ceiling is enforced from the
+ * aura hook (ClampFelfuryToCap), which fires whenever the pool actually moves.
+ *
+ * Inner Demon is the one place the ordering IS load-bearing, and there it holds: the form has no
+ * travel time, so its aura exists -- and Aura::CalcMaxDuration, and therefore OnCalcMaxDuration
+ * below, have already run -- before we debit here. Nothing is stashed between the two calls;
+ * both read the pool off the aura themselves, which is what keeps the pair correct when two
+ * Felsworn cast in the same tick and, more to the point, when two MAPS tick in parallel.
  */
 void demon_hunter_movement_allspellscript::OnSpellCast(Spell* /*spell*/, Unit* caster,
     SpellInfo const* spellInfo, bool /*skipCheck*/)
@@ -659,16 +697,14 @@ void demon_hunter_movement_allspellscript::OnSpellCast(Spell* /*spell*/, Unit* c
 
     if (rankOne == INNER_DEMON_SPELL_ID)
     {
-        EnterInnerDemon(player);
+        EnterInnerDemon(player, spellId);
         return;
     }
 
     if (DhFelfuryFlow const* generator = FindFlow(kDhFelfuryGenerators, rankOne))
     {
-        // The table cell is the TOTAL the ability advertises; the authored Effect 64 has already
-        // delivered kFelfuryStacksFromData of it. `stacks >= 1` is a static_assert above, so this
-        // subtraction cannot wrap.
-        GrantFelfury(player, uint8(generator->stacks - kFelfuryStacksFromData));
+        // The cell is the module's share, already net of whatever the record grants itself.
+        GrantFelfury(player, generator->stacks);
         return;
     }
 
@@ -677,23 +713,33 @@ void demon_hunter_movement_allspellscript::OnSpellCast(Spell* /*spell*/, Unit* c
         uint8 const spent = SpendFelfury(player, spender->stacks);
         if (spent < spender->stacks)
             LOG_WARN("module.demon_hunter",
-                "Spender {} (rank 1 {}) cast by player {} took {} of {} Felfury -- the cast-time "
-                "gate did not run, or the pool was emptied between CheckCast and cast.",
+                "Spender {} (rank 1 {}) cast by player {} took {} of {} Felfury -- the pool was "
+                "emptied between CheckCast and cast.",
                 spellId, rankOne, player->GetGUID().ToString(), spent, spender->stacks);
     }
 }
 
 /*
- * Inner Demon's duration, computed from the Felfury about to be spent.
+ * Inner Demon's duration, bought with the Felfury about to be spent.
  *
- * Fires from Aura::CalcMaxDuration (SpellAuras.cpp:807), which runs from the Aura constructor
- * (:363) -- i.e. inside handle_immediate, BEFORE OnSpellCast debits. Reading the pool here is
- * therefore reading what is about to be spent, not what is left.
+ * Fires from Aura::CalcMaxDuration (SpellAuras.cpp:807), which is reached two ways and both
+ * matter:
+ *   * from the Aura constructor (:363) on a first application -- inside handle_immediate, BEFORE
+ *     OnSpellCast debits, so the pool this reads is what is about to be spent rather than what
+ *     is left;
+ *   * from Aura::RefreshTimers (:858) on a re-cast, BEFORE the RefreshDuration() on the next
+ *     line overwrites the time that was remaining.
  *
- * The value is written again by EnterInnerDemon after the debit, and both writes exist on
- * purpose: this one is what the client's buff timer is first drawn from, and that one is what
- * survives a stray SPELLMOD_DURATION being applied at SpellAuras.cpp:810-811 after this hook
- * returns.
+ * A RE-CAST THEREFORE EXTENDS THE FORM RATHER THAN REPLACING IT, and this is the only hook that
+ * can make that true -- see the comment on EnterInnerDemon for why doing it after the debit is
+ * not available. Extending and not `max()` because Ascension's model is additive: all four of
+ * the deferred extenders add to a running form. The cap is what stops "additive" meaning
+ * "permanent", since a full pool is generated in far less time than a full pool buys.
+ *
+ * The two entries are told apart by identity: on a refresh the aura is already in the target's
+ * applied map, so Unit::GetAura (Unit.cpp:5853) hands back this very object. During the
+ * constructor it is not in that map yet and the lookup misses -- which is also why m_duration is
+ * never read on that path, the constructor not having assigned it at :364 yet.
  *
  * Harmless on login. Player::_LoadAuras builds the aura -- running this hook -- and then
  * overwrites m_maxDuration and m_duration from the saved row via Aura::SetLoadedState
@@ -702,8 +748,12 @@ void demon_hunter_movement_allspellscript::OnSpellCast(Spell* /*spell*/, Unit* c
  */
 void demon_hunter_movement_allspellscript::OnCalcMaxDuration(Aura const* aura, int32& maxDuration)
 {
-    // One dereference and one compare rejects every other aura application on the realm.
-    if (!aura || aura->GetId() != INNER_DEMON_SPELL_ID)
+    // One dereference and two integer compares reject every other aura application on the realm;
+    // only a Felsworn aura pays for the chain walk behind FelswornRankOne.
+    if (!aura || !FelswornSpellIdInRange(aura->GetId()))
+        return;
+
+    if (FelswornRankOne(aura->GetId()) != INNER_DEMON_SPELL_ID)
         return;
 
     Unit* caster = aura->GetCaster();
@@ -723,32 +773,45 @@ void demon_hunter_movement_allspellscript::OnCalcMaxDuration(Aura const* aura, i
     // tests for -1 (SpellAuras.h:139) -- it is an aura that expires on the next Unit update, and
     // a form that flickers reads as "Inner Demon is broken" rather than as "you had no Felfury".
     // The gate makes zero unreachable; EnterInnerDemon logs it if it happens anyway.
-    maxDuration = InnerDemonDurationFor(std::max<uint8>(banked, 1));
+    int32 duration = InnerDemonDurationFor(std::max<uint8>(banked, 1));
+
+    // `> 0` and not merely non-null: a form somehow left permanent (-1) must not have -1 added
+    // to it, and a form on its last millisecond has nothing worth carrying.
+    if (aura == player->GetAura(aura->GetId(), player->GetGUID()) && aura->GetDuration() > 0)
+        duration = std::min<int32>(duration + aura->GetDuration(), InnerDemonDurationCap(player));
+
+    maxDuration = duration;
 }
 
 /*
  * =============================================================================================
- * FELHEART'S RECOMPUTATION (C1)
+ * THE POOL'S OWN CEILING, AND FELHEART'S RECOMPUTATION (C1)
  * =============================================================================================
  *
- * A UnitScript and not a PlayerScript, because the event that matters is an AURA changing and
+ * A UnitScript and not a PlayerScript, because both events that matter are an AURA changing and
  * PlayerScript has no hook for one. UNITHOOK_ON_AURA_APPLY / UNITHOOK_ON_AURA_REMOVE
- * (UnitScript.h:33-34) fire at Unit.cpp:4807 and :4900, and both are on the correct side of the
- * spell mod:
+ * (UnitScript.h:33-34, the virtuals at :84 and :86) fire from three places, and all three are on
+ * the correct side of what this script needs to see:
  *
- *   * apply  -- :4807 is AFTER the `aurApp->_HandleEffect(i, true)` loop at :4800-4805, which is
- *               what reaches AuraEffect::HandleAddModifier and registers the mod. So by the time
- *               we run, Felheart's +1 is live and CalculateAmount will see it.
- *   * remove -- :4900 is AFTER the effects have been unapplied, so the mod is already gone and
- *               the recomputation correctly yields zero.
+ *   apply, first  -- Unit.cpp:4807, AFTER the `aurApp->_HandleEffect(i, true)` loop at
+ *                    :4800-4805, which is what reaches AuraEffect::HandleAddModifier and
+ *                    registers a spell mod. So by the time we run, Felheart's +1 is live and
+ *                    CalculateAmount will see it.
+ *   apply, refresh -- Unit.cpp:4666, immediately after the ModStackAmount(1) at :4665 inside
+ *                    Unit::_TryStackingOrRefreshingExistingAura (:4615). This is the one that
+ *                    makes the Felfury ceiling order-independent: it fires for the pure-data +1
+ *                    whenever it lands, including on a delayed spell whose effects resolve after
+ *                    OnSpellCast has already returned.
+ *   remove        -- Unit.cpp:4900, AFTER the effects have been unapplied, so the mod is already
+ *                    gone and the recomputation correctly yields zero.
  *
  * That ordering is also what makes login order irrelevant: whichever of the Felfury aura and the
  * Felheart passive is restored second, this hook fires for the second one.
  *
  * port-plan.md 6.5 puts C7's UnitScript hooks (OnBeforeRollMeleeOutcomeAgainst,
- * ModifySpellDamageTaken, ModifyMeleeDamage) on this same class rather than on a second one.
- * They are added to the enabledHooks list below when that bucket lands; nothing here needs to
- * move for them.
+ * ModifySpellDamageTaken, ModifyMeleeDamage) on a UnitScript too; felsworn_spells.cpp registers
+ * its own for them rather than adding them here, so that the file that owns a bucket owns its
+ * hooks. Nothing here needs to move.
  */
 class felsworn_felfury_unitscript : public UnitScript
 {
@@ -768,7 +831,32 @@ public:
         if (!unit || !aura)
             return;
 
-        if (IsFelheartRank(aura->GetId()))
+        // The range test first, for the same reason every other first test in this file is a
+        // pair of integer compares: this hook fires for every aura applied to every unit on the
+        // realm, players, pets, bots and creatures alike.
+        uint32 const spellId = aura->GetId();
+        if (!FelswornSpellIdInRange(spellId))
+            return;
+
+        // Master switch, read live and only ever by a unit that just gained a 91000-92999 aura
+        // -- see the comment on DemonHunterConfig. `Enable = 0` has to mean inert, and a `.cast`
+        // of the resource record onto a GM is the one way one of these can exist anyway.
+        if (!sConfigMgr->GetOption<bool>("DemonHunter.Enable", false))
+            return;
+
+        if (spellId == FELFURY_SPELL_ID)
+        {
+            // Only the owner's own pool, matching how FelfuryAura looks it up.
+            if (aura->GetCasterGUID() != unit->GetGUID())
+                return;
+
+            if (Player* player = unit->ToPlayer())
+                ClampFelfuryToCap(player, aura);
+
+            return;
+        }
+
+        if (IsFelheartRank(spellId))
             RecomputeFelfuryHaste(unit);
     }
 
@@ -777,14 +865,19 @@ public:
         if (!unit || !aurApp)
             return;
 
-        if (IsFelheartRank(aurApp->GetBase()->GetId()))
-            RecomputeFelfuryHaste(unit);
+        // Nothing to do for the Felfury aura itself here: a removal cannot leave the pool above
+        // the cap, and the aura is on its way out. IsFelheartRank does the range test, and the
+        // table is empty until Felheart is placed in a tree, so this costs two compares.
+        if (!IsFelheartRank(aurApp->GetBase()->GetId()))
+            return;
+
+        if (!sConfigMgr->GetOption<bool>("DemonHunter.Enable", false))
+            return;
+
+        RecomputeFelfuryHaste(unit);
     }
 
 private:
-    // The range test first, for the same reason every other first test in this file is a pair of
-    // integer compares: these two hooks fire for every aura applied to and removed from every
-    // unit on the realm, players, pets, bots and creatures alike.
     static bool IsFelheartRank(uint32 spellId)
     {
         if (!FelswornSpellIdInRange(spellId))
@@ -801,7 +894,7 @@ private:
 void AddSC_felsworn_felfury()
 {
     // Registered with `new` and never deleted -- ScriptMgr owns script objects for the lifetime
-    // of the process. Same convention as AddSC_demon_hunter (demon_hunter.cpp:618-625), which is
+    // of the process. Same convention as AddSC_demon_hunter (demon_hunter.cpp:628-641), which is
     // where this function is called from.
     //
     // Note what is NOT here: demon_hunter_movement_allspellscript is registered exactly once, by

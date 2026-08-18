@@ -114,6 +114,21 @@ struct DemonHunterConfig
     uint8 ParryLevel     = 1;
     bool  GrantRacials   = true;
 
+    /*
+     * The two Felfury knobs, defaulted from the GENERATED constants rather than from a literal.
+     * A number typed here would be a second opinion about a value dh_spec.py already owns, and
+     * the failure it produces is silent: a cap of 4 against a CumulativeAura of 6 is a resource
+     * that looks like it works and is one stack short of every tooltip.
+     *
+     * Neither knob honours a configured ZERO -- see EffectiveFelfuryCap and InnerDemonMsPerFelfury
+     * in felfury_core.cpp. Unlike DualWieldLevel, where 0 is a deliberate "off" position, a cap
+     * of zero and a duration-per-stack of zero have no reading other than "typo", and the
+     * behaviours they would ship (a visible aura holding nothing; a form that expires on the
+     * tick it is entered) are worse than anything an operator could have meant.
+     */
+    uint8  FelfuryMaxStacks       = FELFURY_MAX_STACKS;
+    uint32 InnerDemonMsPerFelfury = INNER_DEMON_MS_PER_FELFURY;
+
     void Load();
 };
 
@@ -148,7 +163,8 @@ private:
 };
 
 /*
- * The server half of the addon's Double Jump and Glide.
+ * The server half of the addon's Double Jump and Glide, AND the Felfury resource (buckets C1
+ * and C2 of .work/felsworn/port-plan.md section 4, implemented in felfury_core.cpp).
  *
  * An AllSpellScript and NOT a SpellScript, and that is not a style choice. A SpellScript is
  * bound to its spell through the world table `spell_script_names` (ObjectMgr.cpp:6345), so using
@@ -157,21 +173,66 @@ private:
  * (AllSpellScript.h:52): it is registered in code, needs no row, and keeps the generator's
  * ownership of data intact.
  *
- * The one hook is OnSpellCheckCast (AllSpellScript.h:57), dispatched from the very top of
- * Spell::CheckCast (Spell.cpp:5666) -- before the cooldown check at :5672, before power cost,
- * and before Spell::prepare reaches TriggerGlobalCooldown at Spell.cpp:3686. Writing a failure
- * into `res` there is therefore free in exactly the way NOTES.md 5.4 requires.
+ * ONE CLASS AND NOT TWO. felfury_core.cpp adds two of the three overrides below rather than
+ * introducing a parallel AllSpellScript, because a second script would mean a second entry in
+ * every dispatch list it enabled for no gain. It is registered exactly once, by
+ * AddSC_demon_hunter -- registering it again from AddSC_felsworn_felfury would put it twice in
+ * each list and every Felfury debit would happen twice.
+ *
+ * The three hooks, all verified in AllSpellScript.h:
+ *   OnSpellCheckCast   (:57)  dispatched from the very top of Spell::CheckCast (Spell.cpp:5666),
+ *                             before the cooldown check at :5672, before power cost, and before
+ *                             Spell::prepare reaches TriggerGlobalCooldown at :3686. A failure
+ *                             written into `res` is free in exactly the way NOTES.md 5.4 and
+ *                             port-plan 4.C1 both require.
+ *   OnSpellCast        (:103) dispatched from the LAST lines of Spell::_cast (Spell.cpp:4077),
+ *                             after TakePower (:3923). The Felfury debit and multi-grant.
+ *   OnCalcMaxDuration  (:55)  dispatched from Aura::CalcMaxDuration (SpellAuras.cpp:807). Inner
+ *                             Demon's duration, which is bought with the Felfury pool.
+ *
+ * HOOKS ARE OPTED INTO EXPLICITLY. AllSpellScript's constructor treats an empty `enabledHooks`
+ * vector as "all hooks" (AllSpellScript.cpp:96-98 -- the same rule PlayerScript has at
+ * PlayerScript.cpp:967-969), which would register this script against all fourteen AllSpellHook
+ * dispatch lists for the sake of three.
+ *
+ * The class keeps its name. `demon_hunter_movement_allspellscript` is now half a misnomer --
+ * port-plan 6.5 proposes renaming it `felsworn_allspellscript` -- but the name is not free to
+ * change: it is the string handed to ScriptObject, so a rename is a rename of the row in
+ * `acore_world.scriptnames` too, and it would touch felfury_core.cpp and demon_hunter.cpp in
+ * the same breath as a behaviour change. Left for its own commit.
  */
 class demon_hunter_movement_allspellscript : public AllSpellScript
 {
 public:
     demon_hunter_movement_allspellscript() : AllSpellScript("demon_hunter_movement_allspellscript",
     {
-        ALLSPELLHOOK_ON_SPELL_CHECK_CAST
+        ALLSPELLHOOK_ON_SPELL_CHECK_CAST,
+        ALLSPELLHOOK_ON_CAST,
+        ALLSPELLHOOK_ON_CALC_MAX_DURATION
     }) { }
 
+    // Defined in demon_hunter.cpp. It calls Felsworn::GateFelfurySpender before its own test.
     void OnSpellCheckCast(Spell* spell, bool strict, SpellCastResult& res) override;
+
+    // Both defined in felfury_core.cpp. `override` is what makes a future signature change in
+    // AllSpellScript.h a build error here instead of a silently dead hook.
+    void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* spellInfo,
+        bool skipCheck) override;
+    void OnCalcMaxDuration(Aura const* aura, int32& maxDuration) override;
 };
+
+/*
+ * The Felfury cast-time gate, called from demon_hunter_movement_allspellscript::OnSpellCheckCast.
+ *
+ * A free function and not a fourth override because that override already has a definition in
+ * demon_hunter.cpp, and a function may be defined only once. Splitting the gate out is the
+ * smaller lie than moving the falling gate -- which has nothing to do with Felfury -- into a
+ * file named for it.
+ */
+namespace Felsworn
+{
+    void GateFelfurySpender(Spell const* spell, SpellCastResult& res);
+}
 
 class demon_hunter_worldscript : public WorldScript
 {
@@ -186,6 +247,20 @@ public:
     void OnAfterConfigLoad(bool reload) override;
 };
 
+/*
+ * Registration, split by translation unit and called in this order from AddSC_demon_hunter.
+ *
+ *   AddSC_demon_hunter()        demon_hunter.cpp   -- the WorldScript, the PlayerScript and the
+ *                                                     one AllSpellScript above.
+ *   AddSC_felsworn_felfury()    felfury_core.cpp   -- buckets C1/C2. Registers ONLY its own
+ *                                                     UnitScript; the AllSpellScript overrides
+ *                                                     it defines belong to the object above.
+ *   AddSC_felsworn_spells()     felsworn_spells.cpp -- buckets C3-C8. The DB-bound
+ *                                                     SpellScript/AuraScript classes, plus C7's
+ *                                                     UnitScript.
+ */
 void AddSC_demon_hunter();
+void AddSC_felsworn_felfury();
+void AddSC_felsworn_spells();
 
 #endif // MOD_DEMON_HUNTER_H_

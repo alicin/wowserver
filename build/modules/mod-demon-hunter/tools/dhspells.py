@@ -958,6 +958,12 @@ class Plan:
                     self.source_map[src_id] = sid
             cells.update(dh_donors.ALWAYS)
             cells.update(dh_donors.OVERRIDES.get(key, {}))
+            # Second records take CELL_OVERRIDES too. The Felfury aura is the case that forced
+            # this: its CumulativeAura arrives as 0 from the source, because Ascension caps the
+            # pool in its own engine code rather than in the cell. Here the cell IS the cap --
+            # Aura::ModStackAmount clamps against it (SpellAuras.cpp:973-980) -- so a 0 would
+            # mean a resource that can never hold more than one charge.
+            cells.update(getattr(spec, "CELL_OVERRIDES", {}).get(key, {}))
             # BaseLevel and the NAME come from the PARENT ability, not from the donor.
             #
             # BaseLevel is not cosmetic here, it is the whole per-level ramp. CalcValue
@@ -1787,6 +1793,245 @@ DELETE FROM `spell_script_names` WHERE `spell_id` IN ({", ".join(str(s) for s in
     return BANNER.format(name=spec.SQL_FILES["talents"], summary=summary) + "\n".join(out)
 
 
+def _felfury_flows(plan, checks):
+    """Resolve dh_spec's Felfury economy from keys and talent names to spell ids.
+
+    Returns (generators, spenders, fel_addict, felheart) where the first three are
+    [(spell_id, stacks, label)] sorted by id and the last is [(spell_id, label)].
+
+    ABILITY rows carry the RANK 1 id and nothing else, because the module resolves any rank
+    back to it with `SpellMgr::GetFirstSpellInChain` (SpellMgr.cpp:603-609). That is only
+    correct because emit_spells writes the `spell_ranks` rows this generator's plan.rank_chains
+    drives; a ladder missing from that table would leave every rank above 1 costing and
+    granting nothing, so the check below is not decoration.
+
+    GENERATOR rows carry `total - from_data`: the share the MODULE must add on top of the
+    authored `Effect_N = 64 TRIGGER_SPELL -> felfury`. A generator whose whole grant is data
+    contributes no row at all -- there is nothing for the module to do on its cast.
+    """
+    d = plan.dbcs["Spell.dbc"]
+    t = d.table
+    idx = d.index()
+    chained = {key for key, _ranks in getattr(plan, "rank_chains", [])}
+    by_key = {a.key: a for a in spec.ABILITIES}
+    felfury_id = spec.spell_id_for("felfury", 0)
+
+    def ability_id(key):
+        if key in spec.SINGLES_ORDER:
+            return spec.single_spell_id(key)
+        return spec.spell_id_for(key, 0)
+
+    def module_share(sid, total, label):
+        """`total` minus what the record already grants on its own, or None if unusable.
+
+        Counted off the EMITTED record and never declared, because an authored
+        `Effect_N = 64 SPELL_EFFECT_TRIGGER_SPELL -> felfury` reaches the pool through
+        Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:4615), whose ModStackAmount(1) at
+        :4665 is worth one stack and no more. Whether a given record has one is decided in
+        fs_abilities.py (`second_records`) or inherited from the transplanted Ascension record;
+        counting it here means the module's share cannot drift from the data either way.
+        """
+        if not checks.expect(sid in idx, "#70",
+                             f"Felfury generator {label!r} has a Spell.dbc record ({sid})"):
+            return None, 0
+        row = idx[sid]
+        from_data = sum(1 for k in (1, 2, 3)
+                        if d.get_i32(row, t.index_of[f"Effect_{k}"]) == 64
+                        and d.get_i32(row, t.index_of[f"EffectTriggerSpell_{k}"]) == felfury_id)
+        # More authored effects than the ability advertises would have the record and the
+        # tooltip disagreeing, and the module cannot subtract its way out of it.
+        checks.expect(from_data <= total, "#70",
+                      f"Felfury generator {label!r} ({sid}) carries {from_data} authored "
+                      f"`Effect 64 -> {felfury_id}` for an advertised total of {total}")
+        return total - from_data, from_data
+
+    generators, spenders = [], []
+
+    for key, total in sorted(spec.FELFURY_ABILITY_GENERATORS.items()):
+        sid = ability_id(key)
+        share, from_data = module_share(sid, total, key)
+        if share:
+            generators.append((sid, share, f"{key} -- {total} total, {from_data} from data"))
+
+    for key, cost in sorted(spec.FELFURY_ABILITY_SPENDERS.items()):
+        sid = ability_id(key)
+        ability = by_key.get(key)
+        checks.expect(sid in idx, "#70",
+                      f"Felfury spender {key!r} has a Spell.dbc record ({sid})")
+        # A ladder that is not in spell_ranks is a ladder whose ranks 2..n are free.
+        if ability is not None and ability.ranks > 1:
+            checks.expect(key in chained, "#71",
+                          f"Felfury spender {key!r} has {ability.ranks} ranks and a spell_ranks "
+                          f"chain, without which only rank 1 would cost Felfury")
+        spenders.append((sid, cost, f"{key} -- {cost} per cast"))
+
+    # ---- the talent-granted half -------------------------------------------------------------
+    ranks_by_name = {t.name: r for t, _i, r in getattr(plan, "talents", [])}
+    named = (list(spec.FELFURY_TALENT_GENERATORS) + list(spec.FELFURY_TALENT_SPENDERS)
+             + list(spec.FEL_ADDICT_TALENTS) + list(spec.FELHEART_TALENTS))
+
+    if not ranks_by_name:
+        if named:
+            checks.skip("#72", "no talent records were built; the Felfury talent tables are "
+                               "emitted empty and every talent generator/spender is inert")
+        return generators, spenders, [], []
+
+    def talent_id(name, tag):
+        ranks = ranks_by_name.get(name)
+        if not checks.expect(bool(ranks), "#72",
+                             f"{tag} talent {name!r} is declared in one of the three tab "
+                             f"tables -- dh_spec names it, so a missing talent is a rename"):
+            return None
+        # One rank, because plan 3.4 makes every granted active a one-rank talent: a talent rank
+        # IS a spell rank, so a second rank would deactivate the first and the module's single
+        # id would stop matching the spell the player actually casts.
+        if not checks.expect(len(ranks) == 1, "#73",
+                             f"{tag} talent {name!r} has exactly one rank ({len(ranks)} found); "
+                             f"more would need a spell_ranks chain the module could walk"):
+            return None
+        return ranks[0]
+
+    for name, total in sorted(spec.FELFURY_TALENT_GENERATORS.items()):
+        sid = talent_id(name, "Felfury generator")
+        if not sid:
+            continue
+        share, from_data = module_share(sid, total, name)
+        if share:
+            generators.append((sid, share, f"{name} -- {total} total, {from_data} from data"))
+
+    for name, cost in sorted(spec.FELFURY_TALENT_SPENDERS.items()):
+        sid = talent_id(name, "Felfury spender")
+        if sid:
+            spenders.append((sid, cost, f"{name} -- {cost} per cast"))
+
+    fel_addict = []
+    for name, bonus in sorted(spec.FEL_ADDICT_TALENTS.items()):
+        sid = talent_id(name, "Fel Addict")
+        if sid:
+            fel_addict.append((sid, bonus, f"{name} -- +{bonus} max Felfury"))
+
+    felheart = []
+    for name in sorted(spec.FELHEART_TALENTS):
+        sid = talent_id(name, "Felheart")
+        if sid:
+            felheart.append((sid, name))
+
+    return (sorted(generators), sorted(spenders), sorted(fel_addict), sorted(felheart))
+
+
+def _felfury_block(plan, checks):
+    """The Felfury/Inner Demon half of dh_progression.h, as C++ text."""
+    felfury_id = spec.spell_id_for("felfury", 0)
+    inner_demon_id = spec.spell_id_for("inner_demon", 0)
+
+    # FELFURY_STACK_CEILING is READ OFF THE RECORD, not declared. It is the DBC cell
+    # `Aura::ModStackAmount` clamps the pure-data +1 against (SpellAuras.cpp:973-980), so a
+    # constant that merely agreed with dh_spec would be a second opinion about a number only
+    # Spell.dbc actually holds. Reading it is what makes the module's static_assert meaningful.
+    d = plan.dbcs["Spell.dbc"]
+    idx = d.index()
+    ceiling = 0
+    if checks.expect(felfury_id in idx, "#74",
+                     f"the felfury record ({felfury_id}) is in Spell.dbc -- the whole resource "
+                     f"is this one row"):
+        ceiling = d.get_i32(idx[felfury_id], d.table.index_of["CumulativeAura"])
+
+    checks.expect(inner_demon_id in idx, "#74",
+                  f"the inner_demon record ({inner_demon_id}) is in Spell.dbc")
+
+    wanted = spec.FELFURY_MAX_STACKS + max(spec.FEL_ADDICT_TALENTS.values(), default=0)
+    checks.expect(ceiling >= wanted, "#74",
+                  f"the felfury record's CumulativeAura ({ceiling}) can hold a fully talented "
+                  f"pool ({wanted}); below that the data +1 clamps low and Fel Addict does "
+                  f"nothing")
+
+    generators, spenders, fel_addict, felheart = _felfury_flows(plan, checks)
+
+    def flow_array(name, rows, why):
+        head = "\n".join("// " + line for line in why)
+        if not rows:
+            return f"{head}\nconstexpr std::array<DhFelfuryFlow, 0> {name} = {{}};"
+        body = "\n".join(f"    DhFelfuryFlow{{ {sid}, {n} }},   // {label}"
+                         for sid, n, label in rows)
+        return (f"{head}\n"
+                f"constexpr std::array<DhFelfuryFlow, {len(rows)}> {name} =\n"
+                f"{{{{\n{body}\n}}}};")
+
+    generators_array = flow_array("kDhFelfuryGenerators", generators, (
+        "`stacks` is what the MODULE adds on top of the authored `Effect 64 -> felfury`, NOT",
+        "the ability's advertised total. A generator whose whole grant is data has no row here",
+        "and needs none: the resource aura's own ceiling is enforced when that +1 lands.",
+    ))
+    spenders_array = flow_array("kDhFelfurySpenders", spenders, (
+        "`stacks` is the cost. Inner Demon is deliberately absent -- it eats the whole pool,",
+        "which is not a cell, and a row here would debit it twice.",
+    ))
+    fel_addict_array = flow_array("kDhFelAddictRanks", fel_addict, (
+        "`stacks` is how much the talent raises the cap. Ascension's own aura 107 carries",
+        "SpellModOp 31, which does not exist here (MAX_SPELLMOD is 32, SpellDefines.h:109), so",
+        "the cap has to be arithmetic in the module rather than a spell mod.",
+    ))
+
+    if felheart:
+        felheart_body = "\n".join(f"    {sid},   // {label}" for sid, label in felheart)
+        felheart_array = (f"constexpr std::array<uint32, {len(felheart)}> kDhFelheartRanks =\n"
+                          f"{{{{\n{felheart_body}\n}}}};")
+    else:
+        felheart_array = "constexpr std::array<uint32, 0> kDhFelheartRanks = {};"
+
+    return f"""
+// =============================================================================================
+// THE FELFURY RESOURCE -- read by src/felfury_core.cpp
+// =============================================================================================
+//
+// Declared in tools/dh_spec.py and resolved to ids here, so that "which spells move the
+// resource" is one fact in one place. See the comment above dh_spec.FELFURY_ABILITY_GENERATORS.
+
+// The band every Felsworn spell id falls in, used as the cheap first test on hooks that run for
+// every cast and every aura application on the realm. MAX is EXCLUSIVE.
+constexpr uint32 FELSWORN_SPELL_ID_MIN = {spec.SPELL_ID_BASE};
+constexpr uint32 FELSWORN_SPELL_ID_MAX = {spec.TALENT_SPELL_ID_MAX};
+
+constexpr uint32 FELFURY_SPELL_ID     = {felfury_id};   // the resource itself
+constexpr uint32 INNER_DEMON_SPELL_ID = {inner_demon_id};   // the form it is spent on
+
+// The untalented cap the module enforces in code, and the CumulativeAura cell on the felfury
+// record -- which must be the FULLY TALENTED maximum, because the pure-data +1 goes through
+// Aura::ModStackAmount and clamps against it (SpellAuras.cpp:973-980).
+constexpr uint8  FELFURY_MAX_STACKS    = {spec.FELFURY_MAX_STACKS};
+constexpr uint8  FELFURY_STACK_CEILING = {ceiling};
+
+// Milliseconds of Inner Demon bought by one Felfury. Ascension multiplies 803465's +5000 ms
+// SPELLMOD_DURATION by the stacks spent; Player::ApplySpellMod adds a flat mod exactly once and
+// never scales it by a stack count (Player.cpp:10077-10078), so the multiply is script.
+constexpr uint32 INNER_DEMON_MS_PER_FELFURY = {spec.INNER_DEMON_MS_PER_FELFURY};
+
+// `spellId` is the RANK 1 id of a chain; the module maps any rank back to it with
+// SpellMgr::GetFirstSpellInChain (SpellMgr.cpp:603-609), which is why one row covers all nine
+// ranks of Sargeron Smite. std::array and not a C array because a table can legitimately be
+// EMPTY, and `constexpr DhFelfuryFlow kDhFelAddictRanks[] = {{}};` is ill-formed C++.
+//
+// The Dh prefix is not decoration: mod-dk-lowlevel is statically linked into the same
+// worldserver binary, and two modules defining different types under one name is an ODR
+// violation that links without a diagnostic.
+struct DhFelfuryFlow
+{{
+    uint32 spellId;
+    uint8  stacks;
+}};
+
+{generators_array}
+
+{spenders_array}
+
+{fel_addict_array}
+
+// Felheart's SPELLMOD_ALL_EFFECTS is what raises the resource's three zero-amount haste
+// carriers to 1% each. The module recomputes the aura when one of these is learnt or unlearnt.
+{felheart_array}
+"""
+
+
 def emit_header(plan, checks):
     """src/dh_progression.h -- the table the module walks on login and level-up.
 
@@ -1811,6 +2056,7 @@ def emit_header(plan, checks):
         return None
 
     body = "\n".join(f"    {{ {lvl:3d}, {sid} }},   // {name}" for lvl, sid, name in grants)
+    felfury = _felfury_block(plan, checks)
     return f"""/*
  * GENERATED FILE -- DO NOT EDIT.
  *
@@ -1834,6 +2080,8 @@ def emit_header(plan, checks):
 
 #include "Define.h"
 
+#include <array>
+
 // NOT DkGrant. Two statically-linked modules defining different structs with the same name is
 // an ODR violation: it links without a diagnostic and misbehaves at run time.
 struct DhGrant
@@ -1848,7 +2096,7 @@ constexpr DhGrant kDhProgression[] =
 {{
 {body}
 }};
-
+{felfury}
 #endif // MOD_DEMON_HUNTER_DH_PROGRESSION_H
 """
 
