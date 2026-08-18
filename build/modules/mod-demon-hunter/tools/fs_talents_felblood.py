@@ -1116,8 +1116,10 @@ TALENTS_FELBLOOD = (
 SCRIPT_NAMES_FELBLOOD = {
     (5, 3): "spell_fs_stat_spellmod",       # C6 -- crit per 10 Energy, off a stat hook
     (6, 0): "spell_fs_damage_pct_trigger",  # C3 -- aura 354's six talents share this one script
-    (6, 1): "spell_fs_felfury_spender",     # C1 -- the chance not to consume Felfury
-    (8, 0): "spell_fs_modify_cooldown",     # C4 -- binds to 301289's port, see the note
+    # UNBOUND: spell_fs_felfury_spender has no DB-bound class. Felfury is debited globally by
+    # felfury_core.cpp's AllSpellScript, so there is nothing per-spell to attach.
+    # UNBOUND: 92194 Infernal Summoner is `Effect 6 / aura 52 / bp 0`, and the script is a
+    # SpellScript on SPELL_EFFECT_DUMMY. See the note in fs_talents_slaying.py.
     (8, 1): "spell_fs_counter",             # C8 -- every 3rd Ruin or Felwrath
     (9, 0): "spell_fs_counter",             # C8 -- three direct critical strikes
     (9, 2): "spell_fs_counter",             # C8 -- ten Felfury generated

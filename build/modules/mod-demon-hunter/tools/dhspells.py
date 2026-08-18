@@ -1776,7 +1776,17 @@ DELETE FROM `talent_dbc` WHERE `ID` BETWEEN {spec.TALENT_ID_BASE} AND {spec.TALE
 -- would silently stop working when the player put a second point in.
 --
 -- Reusing a script is only safe when it is class-agnostic; dh_talents.py records why for each.
-DELETE FROM `spell_script_names` WHERE `spell_id` IN ({", ".join(str(s) for s in sids)});
+-- DELETED BY OUR OWNED ID RANGE, not by the list about to be inserted.
+--
+-- The narrower form is the obvious one and it is wrong in a way that only shows up months
+-- later: a binding that STOPS being emitted is never named again, so nothing ever removes it.
+-- Three talents whose script was unbound kept their rows through a full regenerate and went on
+-- logging "did not match dbc effect data" once per rank at every boot, because the DELETE only
+-- covered the rows the same statement was re-adding.
+--
+-- The range is this feature's own talent-rank band, so it cannot touch another feature's rows.
+DELETE FROM `spell_script_names`
+ WHERE `spell_id` BETWEEN {spec.TALENT_SPELL_ID_BASE} AND {spec.TALENT_SPELL_ID_MAX - 1};
 {insert_rows('spell_script_names', ['spell_id', 'ScriptName'], srows)}
 """)
 

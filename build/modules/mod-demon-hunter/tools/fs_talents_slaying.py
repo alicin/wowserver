@@ -1238,11 +1238,22 @@ TALENTS_SLAYING = (
 # on the triggered spell, so the generator's emission has to reach TRIGGERS. Named at the top of
 # this file as change 3.
 SCRIPT_NAMES_SLAYING = {
-    (TAB, 3, 2): "spell_fs_modify_cooldown",     # Reachwalker      -- C4, on the TRIGGERS row
+    # Reachwalker, Perpetual Fury and Legionfall are UNBOUND. spell_fs_modify_cooldown is a
+    # SpellScript on SPELL_EFFECT_DUMMY, and none of these records carries one -- 92101, 92124,
+    # 92125 and 92126 are all `Effect 6 / aura 42 / bp 0 / misc 0`. The worldserver said so on
+    # the first real boot, once per rank: "did not match dbc effect data - handler bound to hook
+    # OnEffectHitTarget won't be executed".
+    #
+    # This is review finding [7] surfacing as data: a PERMANENT cooldown reduction on 3.3.5a is
+    # a SPELLMOD_COOLDOWN aura, not a cast-time operation, and these records carry neither the
+    # dummy the script needs nor the modifier the effect needs. Binding a script that can never
+    # run only buys a boot-time error, so the binding is removed and the talents are inert until
+    # the modifier is authored. Recorded in docs/felsworn.md 9.0.
     (TAB, 6, 0): "spell_fs_damage_pct_trigger",  # Demonic Machin.  -- C3
-    (TAB, 7, 0): "spell_fs_felfury_spender",     # Azzinoth's Batt. -- C1, the refund roll
-    (TAB, 7, 2): "spell_fs_modify_cooldown",     # Perpetual Fury   -- C4, on the TRIGGERS row
-    (TAB, 8, 0): "spell_fs_modify_cooldown",     # Legionfall       -- C4, on the TRIGGERS row
+    # Azzinoth's Battlecry is UNBOUND. `spell_fs_felfury_spender` has no DB-bound class and
+    # never did: Felfury is debited globally by the AllSpellScript in felfury_core.cpp, driven
+    # by kDhFelfurySpenders, so there is nothing per-spell to attach. The row only produced
+    # "Script named 'spell_fs_felfury_spender' is assigned in the database, but has no code!"
     (TAB, 8, 1): "spell_fs_carve",               # Whirling Veng.   -- C5, the expiry strike
     (TAB, 8, 2): "spell_fs_damage_pct_trigger",  # Felguard         -- C3
     (TAB, 8, 3): "spell_fs_stat_spellmod",       # Felcaked Blades  -- C6
