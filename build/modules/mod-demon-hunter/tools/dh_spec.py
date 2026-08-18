@@ -584,7 +584,18 @@ TALENT_TABS = (
 # here rather than in the C++: the cap has to agree with the CumulativeAura cell the generator
 # writes onto the aura record, and a header constant that disagrees with the data is the
 # failure this file exists to prevent.
-FELFURY_MAX_STACKS = 5
+# SIX, AND IT IS INFERRED FROM ASCENSION'S OWN GRANTS RATHER THAN CHOSEN.
+#
+# Nothing in the source data states the cap: 800058's CumulativeAura is 0 because Ascension caps
+# the pool in engine code. Three independent cells in their kit say six anyway --
+# Blood of Mannoroth and Burning Hatred each GRANT 6 (a "fill the pool" cooldown only reads as
+# one if 6 is the pool), and 800222 The Demon Within is gated at >= 6 Felfury, which is
+# unreachable under a cap of 5.
+#
+# It was 5 until the module's own static_assert rejected it: a generator granting 6 into a
+# 5-ceiling record is a grant that silently clamps, so two cooldowns would have paid out five
+# sixths of their advertised value forever.
+FELFURY_MAX_STACKS = 6
 INNER_DEMON_MS_PER_FELFURY = 5000
 
 # --------------------------------------------------------------------- the Felfury economy --

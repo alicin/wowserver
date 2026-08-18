@@ -132,7 +132,7 @@ DemonHunter.GrantRacials = 1
 #        Default:     5
 #
 
-Felsworn.Felfury.MaxStacks = 5
+Felsworn.Felfury.MaxStacks = 6
 
 #
 #    Felsworn.InnerDemon.MsPerFelfury

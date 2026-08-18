@@ -140,8 +140,8 @@ constexpr uint32 INNER_DEMON_SPELL_ID = 91480;   // the form it is spent on
 // The untalented cap the module enforces in code, and the CumulativeAura cell on the felfury
 // record -- which must be the FULLY TALENTED maximum, because the pure-data +1 goes through
 // Aura::ModStackAmount and clamps against it (SpellAuras.cpp:973-980).
-constexpr uint8  FELFURY_MAX_STACKS    = 5;
-constexpr uint8  FELFURY_STACK_CEILING = 5;
+constexpr uint8  FELFURY_MAX_STACKS    = 6;
+constexpr uint8  FELFURY_STACK_CEILING = 6;
 
 // Milliseconds of Inner Demon bought by one Felfury. Ascension multiplies 803465's +5000 ms
 // SPELLMOD_DURATION by the stacks spent; Player::ApplySpellMod adds a flat mod exactly once and
